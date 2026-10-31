@@ -21,3 +21,4 @@ emporia*/
 __pycache__/
 .pytest_cache/
 .claude/settings.local.json
+.~lock.*#
