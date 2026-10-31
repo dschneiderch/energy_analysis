@@ -90,5 +90,6 @@ def _load_gas(conn) -> int:
     return store.upsert(conn, "gas_daily", rows)
 
 
-def sync(conn) -> int:
+def sync(conn, since=None) -> int:
+    """Reload all local reference files (always in full; `since` is accepted and ignored)."""
     return _load_rates(conn) + _load_not_home(conn) + _load_gas(conn)
