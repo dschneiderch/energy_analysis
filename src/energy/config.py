@@ -16,6 +16,7 @@ GAS_DIR = ARCHIVE_DIR / "avista_gas"
 BEESTAT_DIR = ARCHIVE_DIR / "beestat"
 ORIGINAL_FILES_DIR = ARCHIVE_DIR / "original_files"
 
+HA_URL = "ws://192.168.50.206:8123/api/websocket"
 LATITUDE = 46.7324
 LONGITUDE = -117.0002
 LOCAL_TZ = "America/Los_Angeles"

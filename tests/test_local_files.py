@@ -1,3 +1,4 @@
+import pytest
 from datetime import date
 
 from energy import config
@@ -37,3 +38,40 @@ def test_gas_files_read_from_configured_dir(db, tmp_path, monkeypatch):
     assert db.execute("select therms from gas_daily where date='2022-12-15'").fetchone()[0] == 3.5
     rows = db.execute("select date, therms, ccf, in_town from gas_daily order by date").fetchall()
     assert [tuple(r) for r in rows] == [("2022-12-15", 3.5, 2.0, 1), ("2022-12-16", None, 4.0, None)]
+
+
+def _rates_file(tmp_path, monkeypatch, body):
+    f = tmp_path / "rates.csv"
+    f.write_text("fuel,schedule,effective_date,component,tier_min,tier_max,rate_per_unit,unit\n" + body)
+    monkeypatch.setattr(config, "RATES_CSV", f)
+    return f
+
+
+def test_rates_resync_replaces_stale_rows(db, tmp_path, monkeypatch):
+    f = _rates_file(tmp_path, monkeypatch, "electric,1,2021-09-01,energy,0,,0.08,$/kWh\n")
+    local_files._load_rates(db)
+    f.write_text(f.read_text().replace("2021-09-01", "2021-10-01"))
+    local_files._load_rates(db)
+    assert [r[0] for r in db.execute("select effective_date from rates")] == ["2021-10-01"]
+
+
+def test_rates_date_without_energy_component_raises(db, tmp_path, monkeypatch):
+    _rates_file(tmp_path, monkeypatch, "electric,1,2021-09-01,energy,0,,0.08,$/kWh\n"
+                                       "electric,1,2022-01-01,basic,0,,6,$/month\n")
+    with pytest.raises(ValueError, match="2022-01-01"):
+        local_files._load_rates(db)
+
+
+def test_gas_blank_date_skipped_and_cleaned(db, tmp_path, monkeypatch):
+    (tmp_path / "gas_furnace_therms_history.csv").write_text("Date,Therms,In Town\n2025-01-01,3.5,1\n,,\n")
+    monkeypatch.setattr(config, "GAS_DIR", tmp_path)
+    db.execute("insert into gas_daily (date) values ('')")
+    local_files._load_gas(db)
+    assert [r[0] for r in db.execute("select date from gas_daily")] == ["2025-01-01"]
+
+
+def test_parse_exclude_dates_errors_name_line():
+    with pytest.raises(ValueError, match=r"line 2.*2025-5-3 -- 2025-5-1"):
+        parse_exclude_dates("2025-1-1\n2025-5-3 -- 2025-5-1\n")
+    with pytest.raises(ValueError, match=r"line 2.*garbage"):
+        parse_exclude_dates("2025-1-1\ngarbage\n")

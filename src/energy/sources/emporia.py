@@ -28,6 +28,9 @@ def start_for_channel(conn, channel: str, since: date | None) -> datetime:
         day = since
     else:
         latest = conn.execute("SELECT max(ts) FROM emporia_hourly WHERE channel=?", (channel,)).fetchone()[0]
+        if not latest:  # channel never returned data: resume from its last successful sync instead
+            latest = conn.execute("SELECT max(range_end) FROM sync_log WHERE source=? AND status='ok'",
+                                  (f"emporia:{channel}",)).fetchone()[0]
         day = datetime.strptime(latest, _FMT).date() - timedelta(days=2) if latest else DEFAULT_START
     return datetime.combine(day, time.min, tzinfo=timezone.utc)
 

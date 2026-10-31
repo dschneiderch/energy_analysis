@@ -243,3 +243,26 @@ def test_write_archive_does_not_overwrite_same_second(tmp_path, monkeypatch):
     a = ecobee._write_archive({"n": 1}, date(2026, 1, 1), date(2026, 1, 31))
     b = ecobee._write_archive({"n": 2}, date(2026, 1, 1), date(2026, 1, 31))
     assert a != b and json.loads(a.read_text()) == {"n": 1} and json.loads(b.read_text()) == {"n": 2}
+
+
+def test_access_token_corrupt_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(ecobee.config, "SECRETS_DIR", tmp_path)
+    ecobee._token_path().write_text("{not json")
+    with pytest.raises(ecobee.EcobeeLoginRequired):
+        ecobee.access_token()
+
+
+def test_sync_derives_vacations_even_when_login_required(db, tmp_path, monkeypatch):
+    api_dir, portal_dir = tmp_path / "api", tmp_path / "portal"
+    api_dir.mkdir()
+    portal_dir.mkdir()
+    monkeypatch.setattr(ecobee.config, "ECOBEE_API_DIR", api_dir)
+    monkeypatch.setattr(ecobee.config, "ECOBEE_PORTAL_DIR", portal_dir)
+    store.upsert(db, "ecobee_interval", vacation_rows("176645687997", "2025-12-22", "2025-12-30"))
+
+    def boom():
+        raise ecobee.EcobeeLoginRequired("run `energy ecobee-login`")
+    monkeypatch.setattr(ecobee, "access_token", boom)
+    with pytest.raises(ecobee.EcobeeLoginRequired):
+        ecobee.sync(db)
+    assert db.execute("select count(*) from not_home where source='ecobee_vacation'").fetchone()[0] == 1

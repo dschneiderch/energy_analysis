@@ -22,6 +22,7 @@ class Energy:
     strip_crosscheck_mismatch: bool = False
     house_kwh: float | None = None
     month_to_date_house_kwh: float | None = None
+    mtd_missing_hours: int = 0
     hp_kwh: float | None = None                     # channels 7+8 only (no strips)
     strip_crosscheck_extra_kwh: float | None = None
     reason: str | None = None                       # why kWh fields are None
@@ -41,6 +42,14 @@ def _full_sum(conn, channel: str, hours: list[str]) -> float | None:
     if any(h not in vals for h in hours):
         return None
     return sum(vals[h] for h in hours)
+
+
+def _partial_sum(conn, channel: str, hours: list[str]) -> tuple[float, int]:
+    """Sum of the available hours of a channel, and how many of the hours are missing."""
+    if not hours:
+        return 0.0, 0
+    vals = _channel_hours(conn, channel, hours[0], _next_hour(hours[-1]))
+    return sum(vals[h] for h in hours if h in vals), sum(1 for h in hours if h not in vals)
 
 
 def _next_hour(ts: str, hours: int = 1) -> str:
@@ -100,8 +109,8 @@ def day_energy(conn, day: date, rt: Runtime) -> Energy:
     start, end = store.local_day_bounds(day)
     house = _full_sum(conn, config.MAINS_CHANNEL, hours)
     month_start = day.replace(day=1)
-    mtd = _full_sum(conn, config.MAINS_CHANNEL, _hours_between(month_start, day))
-    extra = {"house_kwh": house, "month_to_date_house_kwh": mtd}
+    mtd, mtd_missing = _partial_sum(conn, config.MAINS_CHANNEL, _hours_between(month_start, day))
+    extra = {"house_kwh": house, "month_to_date_house_kwh": mtd, "mtd_missing_hours": mtd_missing}
 
     if day < config.HP_START_DATE:
         return _unavailable(f"no Emporia data before {config.HP_START_DATE.isoformat()}", **extra)
@@ -166,5 +175,5 @@ def day_energy(conn, day: date, rt: Runtime) -> Energy:
             mismatch = True
 
     return Energy(totals["heating"], totals["cooling"], totals["other"], strip_total,
-                  hp_total + strip_total, hourly_kwh, cats, mismatch, house, mtd,
+                  hp_total + strip_total, hourly_kwh, cats, mismatch, house, mtd, mtd_missing,
                   hp_kwh=hp_total, strip_crosscheck_extra_kwh=measured, notes=notes)

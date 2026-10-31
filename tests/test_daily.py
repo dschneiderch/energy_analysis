@@ -145,3 +145,15 @@ def test_rate_fallback_note(db):
 def test_month_to_date_unavailable_before_emporia(db):
     r = compute_day(db, date(2020, 6, 1))          # first of month: empty prior range
     assert r["month_to_date_house_kwh"] is None and "month_to_date_house_kwh" in r["unavailable"]
+
+
+def test_missing_mains_hour_noted_not_dropped(db):
+    _full_day(db)
+    for d in range(1, 10):
+        hrs = store.local_day_hours(date(2025, 12, d))
+        db.execute("DELETE FROM emporia_hourly WHERE channel=? AND ts=?", (config.MAINS_CHANNEL, hrs[0]))
+        db.execute("UPDATE emporia_hourly SET kwh=3.0 WHERE channel=? AND ts>?", (config.MAINS_CHANNEL, hrs[0]))
+    db.commit()
+    r = compute_day(db, D)
+    assert r["month_to_date_house_kwh"] is not None
+    assert any("9 missing mains hours counted as 0" in n for n in r["notes"]), r["notes"]

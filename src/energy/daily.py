@@ -37,6 +37,7 @@ def _energy(conn, day, rt, r):
         _set(r, k, getattr(e, k), e.reason)
     if day < config.HP_START_DATE:     # an empty prior range would otherwise sum to 0.0
         e.house_kwh = e.month_to_date_house_kwh = None
+        e.mtd_missing_hours = 0
     _set(r, "house_kwh", e.house_kwh,
          e.reason if day < config.HP_START_DATE else "Emporia mains missing hours for this day")
     _set(r, "month_to_date_house_kwh", e.month_to_date_house_kwh,
@@ -103,8 +104,10 @@ def _cost(conn, day, e, r):
     # Mains already includes the (unmetered) strips, so the rest of the house is mains − total.
     rest = (e.house_kwh - e.total_kwh) if e.house_kwh is not None else 0.0
     prior = e.month_to_date_house_kwh if e.month_to_date_house_kwh is not None else 0.0
-    if e.house_kwh is None or e.month_to_date_house_kwh is None:
+    if e.house_kwh is None:
         r["notes"].append("tier placement approximate: house mains kWh incomplete (missing hours counted as 0)")
+    if e.mtd_missing_hours:
+        r["notes"].append(f"tier placement approximate: {e.mtd_missing_hours} missing mains hours counted as 0")
     out = electric_cost(rs, prior, rest, by_cat)
     r["cost_usd"] = out["cost_usd"]
     _set(r, "cost_by_category", out["cost_by_category"] if e.heating_kwh is not None else None, e.reason)

@@ -252,8 +252,11 @@ def access_token() -> str:
     path = _token_path()
     if not path.exists():
         raise EcobeeLoginRequired("run `energy ecobee-login`")
-    tokens = json.loads(path.read_text())
-    refresh = tokens.get("refresh_token")
+    try:
+        tokens = json.loads(path.read_text())
+        refresh = tokens.get("refresh_token")
+    except (ValueError, AttributeError):
+        raise EcobeeLoginRequired("token file unreadable; run `energy ecobee-login`") from None
     if not refresh:
         raise EcobeeLoginRequired("run `energy ecobee-login`")
     resp = http.request("POST", TOKEN_URL, data={"grant_type": "refresh_token", "refresh_token": refresh,
@@ -338,22 +341,23 @@ def sync(conn, since: date | None = None) -> int:
         store.log_sync(conn, "ecobee_file", path.name, _file_key(path), n, "ok")
         total += n
 
-    # 3: live API. startDate/endDate are UTC days, so end on the UTC date to reach the
-    # current local evening.
-    today = datetime.now(timezone.utc).date()
-    token = access_token()
-    config.ECOBEE_API_DIR.mkdir(parents=True, exist_ok=True)
-    cur = _api_start(conn, since, today)
-    while cur <= today:
-        end = min(cur + timedelta(days=CHUNK_DAYS - 1), today)
-        payload = _fetch(token, cur, end)
-        path = _write_archive(payload, cur, end)
-        n, _ = import_payload(conn, payload)
-        store.log_sync(conn, "ecobee_file", path.name, _file_key(path), n, "ok")
-        store.log_sync(conn, "ecobee", cur.isoformat(), end.isoformat(), n, "ok")
-        total += n
-        cur = end + timedelta(days=1)
-
-    # 4: vacations
-    derive_vacations(conn)
+    try:
+        # 3: live API. startDate/endDate are UTC days, so end on the UTC date to reach the
+        # current local evening.
+        today = datetime.now(timezone.utc).date()
+        token = access_token()
+        config.ECOBEE_API_DIR.mkdir(parents=True, exist_ok=True)
+        cur = _api_start(conn, since, today)
+        while cur <= today:
+            end = min(cur + timedelta(days=CHUNK_DAYS - 1), today)
+            payload = _fetch(token, cur, end)
+            path = _write_archive(payload, cur, end)
+            n, _ = import_payload(conn, payload)
+            store.log_sync(conn, "ecobee_file", path.name, _file_key(path), n, "ok")
+            store.log_sync(conn, "ecobee", cur.isoformat(), end.isoformat(), n, "ok")
+            total += n
+            cur = end + timedelta(days=1)
+    finally:
+        # 4: vacations, derived from stored intervals even if the API step fails
+        derive_vacations(conn)
     return total

@@ -7,7 +7,7 @@ import websockets
 
 from .. import config, store
 
-URL = "ws://192.168.50.206:8123/api/websocket"
+RECV_TIMEOUT_S = 60
 CO2_ID = "sensor.electricity_maps_co2_intensity"
 FOSSIL_ID = "sensor.electricity_maps_grid_fossil_fuel_percentage"
 DEFAULT_START = date(2024, 2, 1)
@@ -25,12 +25,19 @@ def parse_statistics(result: dict) -> list[dict]:
     return [by_ts[k] for k in sorted(by_ts)]
 
 
+async def _recv(ws):
+    try:
+        return await asyncio.wait_for(ws.recv(), RECV_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        raise RuntimeError(f"Home Assistant did not respond within {RECV_TIMEOUT_S}s") from None
+
+
 async def _fetch(token: str, windows: list[tuple[datetime, datetime]]) -> list[dict]:
     results = []
-    async with websockets.connect(URL, max_size=None) as ws:
-        await ws.recv()  # auth_required
+    async with websockets.connect(config.HA_URL, max_size=None) as ws:
+        await _recv(ws)  # auth_required
         await ws.send(json.dumps({"type": "auth", "access_token": token}))
-        msg = json.loads(await ws.recv())
+        msg = json.loads(await _recv(ws))
         if msg.get("type") != "auth_ok":
             raise RuntimeError(f"Home Assistant auth failed: {msg.get('type')}")
         for i, (a, b) in enumerate(windows, start=1):
@@ -39,7 +46,7 @@ async def _fetch(token: str, windows: list[tuple[datetime, datetime]]) -> list[d
                 "start_time": a.isoformat(), "end_time": b.isoformat(),
                 "statistic_ids": [CO2_ID, FOSSIL_ID], "period": "hour", "types": ["mean"]}))
             while True:
-                reply = json.loads(await ws.recv())
+                reply = json.loads(await _recv(ws))
                 if reply.get("id") != i:
                     continue
                 if not reply.get("success"):

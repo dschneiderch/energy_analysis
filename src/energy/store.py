@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS emporia_hourly (
     channel TEXT NOT NULL, ts TEXT NOT NULL, kwh REAL, channel_name TEXT,
     PRIMARY KEY (channel, ts)
 );
+CREATE INDEX IF NOT EXISTS emporia_hourly_ts ON emporia_hourly (ts);
 CREATE TABLE IF NOT EXISTS grid_carbon_hourly (
     ts TEXT NOT NULL PRIMARY KEY, co2_g_per_kwh REAL, fossil_pct REAL
 );

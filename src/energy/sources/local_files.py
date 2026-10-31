@@ -13,13 +13,21 @@ def _d(s: str) -> date:
 
 def parse_exclude_dates(text: str) -> list[tuple[date, date]]:
     out = []
-    for line in text.splitlines():
-        line = line.split("#", 1)[0].strip()
+    for n, raw in enumerate(text.splitlines(), start=1):
+        line = raw.split("#", 1)[0].strip()
         if not line:
             continue
-        parts = re.split(r"\s+--\s+", line)
-        start = _d(parts[0])
-        out.append((start, _d(parts[1]) if len(parts) > 1 else start))
+        try:
+            parts = re.split(r"\s+--\s+", line)
+            if len(parts) > 2:
+                raise ValueError("too many parts")
+            start = _d(parts[0])
+            end = _d(parts[1]) if len(parts) > 1 else start
+        except ValueError as exc:
+            raise ValueError(f"exclude_dates line {n}: cannot parse {raw.strip()!r}") from exc
+        if end < start:
+            raise ValueError(f"exclude_dates line {n}: end before start in {raw.strip()!r}")
+        out.append((start, end))
     return out
 
 
@@ -39,7 +47,20 @@ def _load_rates(conn) -> int:
             "tier_max": _num(r["tier_max"]), "rate_per_unit": _num(r["rate_per_unit"]),
             "unit": r["unit"],
         } for r in csv.DictReader(fh)]
-    return store.upsert(conn, "rates", rows)
+    by_sched: dict[tuple, set] = {}
+    for r in rows:
+        by_sched.setdefault((r["fuel"], r["schedule"]), {}).setdefault(r["effective_date"], set()).add(r["component"])
+    for (fuel, sched), dates in by_sched.items():
+        for d, comps in sorted(dates.items()):
+            if "energy" not in comps:
+                raise ValueError(f"rates.csv: effective_date {d} ({fuel} schedule {sched}) has no 'energy' component")
+    cols = list(rows[0]) if rows else []
+    with conn:  # single transaction: replace the table with the file's contents
+        conn.execute("DELETE FROM rates")
+        for r in rows:
+            conn.execute(f"INSERT OR REPLACE INTO rates ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                         [r[c] for c in cols])
+    return len(rows)
 
 
 def _load_not_home(conn) -> int:
@@ -63,7 +84,9 @@ def _load_gas(conn) -> int:
     if hist.exists():
         with open(hist, newline="", encoding="utf-8-sig") as fh:
             for r in csv.DictReader(fh):
-                key = r["Date"].strip()
+                key = (r.get("Date") or "").strip()
+                if not key:
+                    continue
                 it = _num(r.get("In Town"))
                 days.setdefault(key, {})
                 days[key]["therms"] = _num(r.get("Therms"))
@@ -87,6 +110,8 @@ def _load_gas(conn) -> int:
 
     rows = [{"date": k, "therms": v.get("therms"), "ccf": v.get("ccf"), "in_town": v.get("in_town")}
             for k, v in sorted(days.items())]
+    with conn:
+        conn.execute("DELETE FROM gas_daily WHERE date = ''")  # cleanup of rows from blank CSV lines
     return store.upsert(conn, "gas_daily", rows)
 
 

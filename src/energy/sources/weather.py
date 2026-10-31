@@ -20,6 +20,17 @@ def parse_open_meteo(payload: dict, source: str) -> list[dict]:
     return rows
 
 
+PROVISIONAL_DAYS = 5
+
+
+def tag_provisional(rows: list[dict], now: datetime) -> list[dict]:
+    """The archive endpoint serves modelled (forecast-like) values for the last few days;
+    tag those 'forecast' so reports note them. A later sync re-fetches them as 'archive'."""
+    cutoff = (now - timedelta(days=PROVISIONAL_DAYS)).strftime(_FMT)
+    return [{**r, "source": "forecast"} if r["source"] == "archive" and r["ts"] > cutoff else r
+            for r in rows]
+
+
 def _params(**extra) -> dict:
     return {"latitude": config.LATITUDE, "longitude": config.LONGITUDE,
             "hourly": "temperature_2m,wind_speed_10m", "temperature_unit": "fahrenheit",
@@ -44,7 +55,7 @@ def sync(conn, since: date | None = None) -> int:
     while cur <= today:
         end = min(cur + timedelta(days=364), today)
         payload = _get(ARCHIVE_URL, _params(start_date=cur.isoformat(), end_date=end.isoformat()))
-        rows = parse_open_meteo(payload, "archive")
+        rows = tag_provisional(parse_open_meteo(payload, "archive"), datetime.now(timezone.utc))
         n = store.upsert(conn, "weather_hourly", rows)
         store.log_sync(conn, "weather_archive", cur.isoformat(), end.isoformat(), n, "ok")
         total += n

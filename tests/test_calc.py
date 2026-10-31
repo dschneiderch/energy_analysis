@@ -275,3 +275,15 @@ def test_hdd_ecobee_hourly_then_daily_mean(db):
     w2 = day_weather(db, day2)
     assert w2["hdd_ecobee"] == pytest.approx(45.0) and w2["hdd_ecobee_method"] == "daily_mean"
     assert w2["hdd"] is None
+
+
+def test_month_to_date_counts_missing_hours_as_zero(db):
+    day = date(2025, 12, 3)
+    rows = []
+    for d in (date(2025, 12, 1), date(2025, 12, 2), day):
+        rows += [{"channel": config.MAINS_CHANNEL, "ts": h, "kwh": 1.0, "channel_name": "mains"}
+                 for h in store.local_day_hours(d)]
+    store.upsert(db, "emporia_hourly", rows[:3] + rows[4:])  # drop one Dec 1 hour
+    fill_hp(db, day, 0.25)
+    e = day_energy(db, day, day_runtime(db, day))
+    assert e.month_to_date_house_kwh == pytest.approx(47.0) and e.mtd_missing_hours == 1
