@@ -273,6 +273,20 @@ Human-readable table by default, or `--json`. Every field is either a value or `
 
 Gas outputs are checked with a gas-era date such as `energy day 2022-12-15`.
 
+## 10a. Folder cleanup
+
+Once the database is fully synced and the acceptance checks pass, every original data file in the project root moves (not deletes) into `data_archive/original_files/`, keeping its name and folder structure. That covers:
+- the Avista gas CSV/ODS files
+- `gas_furnace_therms_history.csv`
+- the Emporia export folders and zips
+- the KPUW HDD CSVs
+- `heat_energy.ods`, `4BA438-Emporia_Vue-1DAY.ods`
+- the Avista rate PDFs, plus the downloaded electric rate PDF
+
+These stay where they are: `.env`, `keys.json`, `.claude/`, `energy_analysis.code-workspace`, `data_archive/`, `data/energy.sqlite`, and the project's own files (`src/`, `tests/`, `docs/`, `pyproject.toml`, `uv.lock`, `rates.csv`, `.gitignore`).
+
+The gas files are re-read on every sync, so `config.GAS_FILES_DIR` points at the archive after the move. Files in `../insulation_impact_analysis` are not moved.
+
 ## 11. Known limitations
 
 - **Billing cycles:** Avista bills on billing cycles, not calendar months. Tier placement uses calendar months as an approximation.

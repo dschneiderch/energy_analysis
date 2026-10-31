@@ -56,6 +56,7 @@
     - Paths: `PROJECT_ROOT: Path`, `DB_PATH`, `SECRETS_DIR`, `ARCHIVE_DIR = PROJECT_ROOT/"data_archive"`, `INSULATION_DIR = PROJECT_ROOT.parent/"insulation_impact_analysis"`, `RATES_CSV = PROJECT_ROOT/"rates.csv"`
     - Thermostat ids: `LR_ECOBEE_ID`, `UP_ECOBEE_ID`, `BEESTAT_LR = 47724`, `BEESTAT_UP = 47723`, `BEESTAT_OLD = 47722`, `LR_BEESTAT_START = date(2023,10,30)`
     - `VIRTUAL_CHANNELS = ("97", "98")`
+    - `ORIGINAL_FILES_DIR = ARCHIVE_DIR/"original_files"`, and `GAS_FILES_DIR = PROJECT_ROOT` (Task 10 changes it to `ORIGINAL_FILES_DIR`)
     - `load_secrets() -> dict[str, str]`: merges `.env` key/values with `EMPORIA_USERNAME`/`EMPORIA_PASSWORD` from `keys.json`.
   - `energy.store`:
     - `connect(path: str | Path = DB_PATH) -> sqlite3.Connection`: creates every table in spec §5 if missing (`":memory:"` allowed), sets `row_factory = sqlite3.Row`, creates parent dirs.
@@ -164,7 +165,7 @@ def test_rate_outside_table(db):          # Review Focus 5
 ```
 
 - [ ] **Step 3: Run the tests to confirm they fail**: `uv run pytest tests/test_local_files.py tests/test_rates.py -v`. Expected: FAIL.
-- [ ] **Step 4: Implement `local_files.py` and `calc/rates.py`.** Gas CSVs live in `PROJECT_ROOT`. `exclude_dates.txt` is at `INSULATION_DIR/"exclude_dates.txt"`.
+- [ ] **Step 4: Implement `local_files.py` and `calc/rates.py`.** Gas CSVs are read from `config.GAS_FILES_DIR`, looked up at call time, never copied into a module-level constant. `exclude_dates.txt` is at `INSULATION_DIR/"exclude_dates.txt"`.
 - [ ] **Step 5: Run the tests to confirm they pass.** Expected: all pass.
 - [ ] **Step 6: Commit**: `git add rates.csv src tests && git commit -m "feat: local files loader and Avista rate lookup"`
 
@@ -499,3 +500,49 @@ def test_sync_continues_after_ecobee_login_failure(monkeypatch, capsys):   # Rev
 
   Then run `uv run energy day 2022-12-15`. Expected: gas therms, `furnace_heat_kwh` = therms × 29.3071 × 0.95, and gas cost at 1.03788 $/therm (the 11/01/22 rate), with kWh and carbon unavailable and the reasons shown. If any value is off, fix the cause before claiming completion.
 - [ ] **Step 8: Commit**: `git add src tests && git commit -m "feat: daily report and energy CLI"`
+
+---
+
+### Task 10: Archive the original files (spec §10a)
+
+**Files:**
+- Modify: `src/energy/config.py` (`GAS_FILES_DIR = ORIGINAL_FILES_DIR`)
+- Test: `tests/test_local_files.py`
+
+**Interfaces:**
+- Consumes: `config.GAS_FILES_DIR`, `local_files.sync`, `cli.main`
+
+Do this task only after Task 9's acceptance step passes.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+def test_gas_files_read_from_configured_dir(db, tmp_path, monkeypatch):
+    (tmp_path / "gas_furnace_therms_history.csv").write_text("Date,Therms,HDD – 65F,In Town\n2022-12-15,3.5,40,1\n")
+    monkeypatch.setattr(config, "GAS_FILES_DIR", tmp_path)
+    local_files.sync(db)
+    assert db.execute("select therms from gas_daily where date='2022-12-15'").fetchone()[0] == 3.5
+
+def test_gas_dir_is_archive():
+    assert config.GAS_FILES_DIR == config.ORIGINAL_FILES_DIR
+```
+
+- [ ] **Step 2: Run them.** Expected: the first passes (Task 2 already reads from `GAS_FILES_DIR`), the second fails.
+- [ ] **Step 3: Record the "before" state**: `uv run energy day 2022-12-15 --json > data/before_gas.json` and `sqlite3 data/energy.sqlite "select count(*), sum(therms) from gas_daily"`.
+- [ ] **Step 4: Move the files** with `mkdir -p data_archive/original_files` and `mv`. Move exactly these, keeping names and folders:
+  - the 4 `avista-gas-daily-*` CSV/ODS pairs
+  - `gas_furnace_therms_history.csv`
+  - `4BA438-Emporia_Vue-1DAY.ods`, `heat_energy.ods`
+  - the 5 `emporia*` folders and zips
+  - the 7 `KPUW_*.csv` files
+  - `IDGRatehist9126.pdf`, `IDGShortcuts9126.pdf`, and `data/ideratehist9126.pdf`
+
+  Nothing is deleted. Anything else unexpected in the project root is listed for the user, not moved.
+- [ ] **Step 5: Set `GAS_FILES_DIR = ORIGINAL_FILES_DIR`** in `config.py`.
+- [ ] **Step 6: Verify**:
+  - `uv run pytest -v`: all pass.
+  - `uv run energy sync local`, then the same `sqlite3` count/sum query matches Step 3.
+  - `uv run energy day 2022-12-15 --json` matches `data/before_gas.json`.
+  - `ls -A` of the project root shows only the files spec §10a says stay.
+  - `git status` shows only the `config.py` and test changes.
+- [ ] **Step 7: Commit**: `git add src tests && git commit -m "chore: archive original data files; read gas history from archive"`
