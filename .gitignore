@@ -1,0 +1,23 @@
+# secrets
+.env
+keys.json
+.secrets/
+
+# local data (personal account info, large raw files)
+data/
+data_archive/
+*.sqlite
+*.db
+*.csv
+!rates.csv
+!tests/**/*.csv
+*.ods
+*.zip
+*.pdf
+emporia*/
+
+# tooling
+.venv/
+__pycache__/
+.pytest_cache/
+.claude/settings.local.json
