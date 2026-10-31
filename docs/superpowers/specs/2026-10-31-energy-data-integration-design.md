@@ -47,7 +47,7 @@ These come from the user and from the data exploration on 2026-10-31.
 | Weather | Open-Meteo archive API (`archive-api.open-meteo.com/v1/archive`), hourly `temperature_2m` (°F) and `wind_speed_10m` (mph), timezone UTC | any date | modeled reanalysis at the configured coordinates; archive lags a few days, so fall back to the forecast API (`past_days`) for recent dates and tag those rows |
 | Avista rates | `rates.csv` (in git), hand-transcribed from Avista's Idaho rate-history PDFs: electric Schedule 1 (`ideratehist9126.pdf`) and gas Schedule 101 (`IDGRatehist9126.pdf`) | all rate changes covering 2021 → now | OpenEI is not used (no Idaho Avista data after 2018, no gas) |
 | Gas use | `gas_furnace_therms_history.csv` (therms per day), plus raw `avista-gas-daily-*.csv` (CCF meter reads ~16:00) | Dec 2021 – May 2023 with gaps | |
-| Not-home days | `../insulation_impact_analysis/exclude_dates.txt` (date ranges), plus ecobee vacation events | 2021-12 → 2026-01 (file), plus events | vacation events are long numeric ids, hex ids, or "Vacation"; their heat setpoint is 55°F |
+| Not-home days | `exclude_dates.txt` in the project root (committed; the user keeps adding to it), plus ecobee vacation events | 2021-12 → present (file), plus events | vacation events are long numeric ids, hex ids, or "Vacation"; their heat setpoint is 55°F |
 
 Secrets live in `.env` (`HA_TOKEN`, `ECOBEE_USERNAME`, `ECOBEE_PASSWORD`, `BEESTAT_API_KEY`) and `keys.json` (Emporia). Saved tokens go in `.secrets/`. All of these are gitignored.
 
@@ -130,7 +130,7 @@ fuel,schedule,effective_date,component,tier_min,tier_max,rate_per_unit,unit
 | Emporia | Hourly kWh for every channel on device 219614, in 30-day chunks, from 2023-04-15. |
 | HA carbon | Hourly means for both statistics, from 2024-02-01. |
 | Weather | Hourly from 2021-11-01 (one month before the gas data starts). |
-| Local files | Re-read `rates.csv`, `exclude_dates.txt` and the gas CSVs on every sync. They are small. |
+| Local files | Re-read `rates.csv`, `exclude_dates.txt` and the gas CSVs on every sync. They are small. For `exclude_dates.txt`, all `not_home` rows with source `exclude_dates` are replaced by the file's current contents, so additions, edits and removals all take effect. |
 | ecobee vacation events | Derived from `ecobee_interval` on each sync, into `not_home` with source `ecobee_vacation`. |
 
 ## 7. Daily report computation (`daily.py`)
@@ -234,7 +234,8 @@ Human-readable table by default, or `--json`. Every field is either a value or `
 | `HDD_BASE_F`, `CDD_BASE_F` | 65, 65 | degree-day bases |
 | `HEATING_DAY_MIN_HDD` | 5 | heating-day rule without thermostat data |
 | `EMPORIA_DEVICE_GID`, `HP_CHANNELS`, `MAINS_CHANNEL` | 219614, ("7","8"), "1,2,3" | energy channels |
-| `INSULATION_DIR` | `../insulation_impact_analysis` | portal CSVs and `exclude_dates.txt` |
+| `INSULATION_DIR` | `../insulation_impact_analysis` | portal CSVs |
+| `EXCLUDE_DATES_FILE` | `exclude_dates.txt` in the project root | not-home date ranges |
 
 ## 9. Error handling
 
@@ -283,7 +284,7 @@ Once the database is fully synced and the acceptance checks pass, every original
 - `heat_energy.ods`, `4BA438-Emporia_Vue-1DAY.ods`
 - the Avista rate PDFs, plus the downloaded electric rate PDF
 
-These stay where they are: `.env`, `keys.json`, `.claude/`, `energy_analysis.code-workspace`, `data_archive/`, `data/energy.sqlite`, and the project's own files (`src/`, `tests/`, `docs/`, `pyproject.toml`, `uv.lock`, `rates.csv`, `.gitignore`).
+These stay where they are: `.env`, `keys.json`, `.claude/`, `energy_analysis.code-workspace`, `data_archive/`, `data/energy.sqlite`, and the project's own files (`src/`, `tests/`, `docs/`, `pyproject.toml`, `uv.lock`, `rates.csv`, `exclude_dates.txt`, `.gitignore`).
 
 The gas files are re-read on every sync, so `config.GAS_FILES_DIR` points at the archive after the move. Files in `../insulation_impact_analysis` are not moved.
 

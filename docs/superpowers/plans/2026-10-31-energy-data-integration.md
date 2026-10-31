@@ -56,6 +56,7 @@
     - Paths: `PROJECT_ROOT: Path`, `DB_PATH`, `SECRETS_DIR`, `ARCHIVE_DIR = PROJECT_ROOT/"data_archive"`, `INSULATION_DIR = PROJECT_ROOT.parent/"insulation_impact_analysis"`, `RATES_CSV = PROJECT_ROOT/"rates.csv"`
     - Thermostat ids: `LR_ECOBEE_ID`, `UP_ECOBEE_ID`, `BEESTAT_LR = 47724`, `BEESTAT_UP = 47723`, `BEESTAT_OLD = 47722`, `LR_BEESTAT_START = date(2023,10,30)`
     - `VIRTUAL_CHANNELS = ("97", "98")`
+    - `EXCLUDE_DATES_FILE = PROJECT_ROOT/"exclude_dates.txt"`
     - `ORIGINAL_FILES_DIR = ARCHIVE_DIR/"original_files"`, and `GAS_FILES_DIR = PROJECT_ROOT` (Task 10 changes it to `ORIGINAL_FILES_DIR`)
     - `load_secrets() -> dict[str, str]`: merges `.env` key/values with `EMPORIA_USERNAME`/`EMPORIA_PASSWORD` from `keys.json`.
   - `energy.store`:
@@ -116,7 +117,7 @@ def test_http_retries_5xx_then_returns(monkeypatch):
 - Consumes: `store.connect`, `store.upsert`, `config.RATES_CSV`, `config.INSULATION_DIR`
 - Produces:
   - `local_files.parse_exclude_dates(text: str) -> list[tuple[date, date]]`: handles `YYYY-M-D -- YYYY-M-D` ranges, single dates, and `#` comments.
-  - `local_files.sync(conn) -> int`: loads `rates.csv` → `rates`; `exclude_dates.txt` → `not_home` (source `exclude_dates`); `gas_furnace_therms_history.csv` (columns `Date,Therms,HDD – 65F,In Town`) → `gas_daily.therms`/`in_town`; raw `avista-gas-daily-*.csv` CCF values → `gas_daily.ccf`, keyed by the local date of each reading.
+  - `local_files.sync(conn) -> int`: loads `rates.csv` → `rates`; `config.EXCLUDE_DATES_FILE` → `not_home` (deletes all rows with source `exclude_dates`, then inserts the file's current ranges, in one transaction); `gas_furnace_therms_history.csv` (columns `Date,Therms,HDD – 65F,In Town`) → `gas_daily.therms`/`in_town`; raw `avista-gas-daily-*.csv` CCF values → `gas_daily.ccf`, keyed by the local date of each reading.
   - `calc.rates.rate_on(conn, fuel: str, schedule: str, day: date) -> RateSet | None`
   - `RateSet` is a dataclass with:
     - `effective_date: date`
@@ -151,6 +152,12 @@ def test_parse_exclude_dates():
     txt = "# c\n2021-12-23 -- 2022-1-17\n2025-8-16 -- 2025-8-17\n"
     assert parse_exclude_dates(txt) == [(date(2021,12,23), date(2022,1,17)), (date(2025,8,16), date(2025,8,17))]
 
+def test_exclude_dates_resync_adds_and_removes(db, tmp_path, monkeypatch):
+    f = tmp_path / "exclude_dates.txt"; monkeypatch.setattr(config, "EXCLUDE_DATES_FILE", f)
+    f.write_text("2025-8-16 -- 2025-8-17\n"); local_files.sync(db)
+    f.write_text("2026-11-20 -- 2026-11-27\n"); local_files.sync(db)
+    assert db.execute("select start_date, end_date from not_home where source='exclude_dates'").fetchall() == [("2026-11-20", "2026-11-27")]
+
 def test_rate_on_known_dates(db):
     local_files.sync(db)
     r = rate_on(db, "electric", "1", date(2025, 12, 15))
@@ -165,7 +172,7 @@ def test_rate_outside_table(db):          # Review Focus 5
 ```
 
 - [ ] **Step 3: Run the tests to confirm they fail**: `uv run pytest tests/test_local_files.py tests/test_rates.py -v`. Expected: FAIL.
-- [ ] **Step 4: Implement `local_files.py` and `calc/rates.py`.** Gas CSVs are read from `config.GAS_FILES_DIR`, looked up at call time, never copied into a module-level constant. `exclude_dates.txt` is at `INSULATION_DIR/"exclude_dates.txt"`.
+- [ ] **Step 4: Implement `local_files.py` and `calc/rates.py`.** Gas CSVs are read from `config.GAS_FILES_DIR`, looked up at call time, never copied into a module-level constant.
 - [ ] **Step 5: Run the tests to confirm they pass.** Expected: all pass.
 - [ ] **Step 6: Commit**: `git add rates.csv src tests && git commit -m "feat: local files loader and Avista rate lookup"`
 
@@ -537,7 +544,7 @@ def test_gas_dir_is_archive():
   - the 7 `KPUW_*.csv` files
   - `IDGRatehist9126.pdf`, `IDGShortcuts9126.pdf`, and `data/ideratehist9126.pdf`
 
-  Nothing is deleted. Anything else unexpected in the project root is listed for the user, not moved.
+  `exclude_dates.txt` stays in the root. Nothing is deleted. Anything else unexpected in the project root is listed for the user, not moved.
 - [ ] **Step 5: Set `GAS_FILES_DIR = ORIGINAL_FILES_DIR`** in `config.py`.
 - [ ] **Step 6: Verify**:
   - `uv run pytest -v`: all pass.
