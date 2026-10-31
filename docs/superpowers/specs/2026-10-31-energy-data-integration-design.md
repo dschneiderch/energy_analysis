@@ -204,7 +204,8 @@ If `D` is after the newest rate row, use the newest rate and add a note.
 ### 7.7 Gas (dates with `gas_daily` rows)
 
 - `gas_therms`
-- `gas_kwh_equiv = therms × 29.3071`
+- `gas_kwh_equiv = therms × 29.3071` (energy content of the gas burned)
+- `furnace_heat_kwh = gas_kwh_equiv × FURNACE_AFUE` (heat actually delivered to the house; AFUE 0.95). This is the number to compare against heat pump kWh in later analyses.
 - `gas_cost = therms × (Schedule 101 per-therm total + tax adj)`, excluding the basic charge
 - `gas_gco2e = therms × 5306` (EPA combustion factor 53.06 kg CO2/MMBtu)
 
@@ -229,6 +230,7 @@ Human-readable table by default, or `--json`. Every field is either a value or `
 | `HP_START_DATE` | 2023-04-15 | furnace → heat pump changeover |
 | `STRIP_INSTALL_DATE` | 2025-04-01 | update when the real date is known |
 | `STRIP_KW` | 5.0 | heat strip rating |
+| `FURNACE_AFUE` | 0.95 | old gas furnace efficiency rating |
 | `HDD_BASE_F`, `CDD_BASE_F` | 65, 65 | degree-day bases |
 | `HEATING_DAY_MIN_HDD` | 5 | heating-day rule without thermostat data |
 | `EMPORIA_DEVICE_GID`, `HP_CHANNELS`, `MAINS_CHANNEL` | 219614, ("7","8"), "1,2,3" | energy channels |
