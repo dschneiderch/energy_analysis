@@ -28,7 +28,7 @@ def _params(**extra) -> dict:
 
 def _get(url: str, params: dict) -> dict:
     resp = http.request("GET", url, params=params)
-    resp.raise_for_status()
+    http.raise_for_status(resp)
     return resp.json()
 
 

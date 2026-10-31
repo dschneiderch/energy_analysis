@@ -34,7 +34,7 @@ def sync(conn, since: date | None = None) -> int:
     resp = http.request("GET", URL, params={"api_key": key, "resource": "runtime_thermostat_summary",
                                             "method": "read_id"},
                         headers={"User-Agent": USER_AGENT})
-    resp.raise_for_status()
+    http.raise_for_status(resp)
     body = resp.json()
     if not body.get("success"):
         raise RuntimeError("beestat request failed")

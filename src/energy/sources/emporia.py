@@ -23,13 +23,13 @@ def rows_from_chart(channel: str, name: str, usage: list, first: datetime, end: 
     return rows
 
 
-def _start_date(conn, since):
+def start_for_channel(conn, channel: str, since: date | None) -> datetime:
     if since:
-        return since
-    latest = conn.execute("SELECT max(ts) FROM emporia_hourly").fetchone()[0]
-    if latest:
-        return datetime.strptime(latest, _FMT).date() - timedelta(days=2)
-    return DEFAULT_START
+        day = since
+    else:
+        latest = conn.execute("SELECT max(ts) FROM emporia_hourly WHERE channel=?", (channel,)).fetchone()[0]
+        day = datetime.strptime(latest, _FMT).date() - timedelta(days=2) if latest else DEFAULT_START
+    return datetime.combine(day, time.min, tzinfo=timezone.utc)
 
 
 def _login() -> PyEmVue:
@@ -62,11 +62,10 @@ def _channels(vue: PyEmVue) -> list[tuple[str, str, object]]:
 def sync(conn, since: date | None = None) -> int:
     vue = _login()
     channels = _channels(vue)
-    start_day = _start_date(conn, since)
     end_dt = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     total = 0
     for num, name, ch in channels:
-        cur = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
+        cur = start_for_channel(conn, num, since)
         while cur < end_dt:
             chunk_end = min(cur + timedelta(days=CHUNK_DAYS), end_dt)
             usage, first = vue.get_chart_usage(ch, cur, chunk_end, scale=Scale.HOUR.value,
