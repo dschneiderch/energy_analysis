@@ -105,3 +105,13 @@ def local_day_bounds(day: date) -> tuple[str, str]:
     end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=tz)
     return (start.astimezone(timezone.utc).strftime(_UTC_FMT),
             end.astimezone(timezone.utc).strftime(_UTC_FMT))
+
+
+def local_day_hours(day: date) -> list[str]:
+    """UTC hour-start ISO strings covering the local day (23, 24 or 25 of them)."""
+    start, end = (datetime.strptime(s, _UTC_FMT).replace(tzinfo=timezone.utc) for s in local_day_bounds(day))
+    out = []
+    while start < end:
+        out.append(start.strftime(_UTC_FMT))
+        start += timedelta(hours=1)
+    return out
