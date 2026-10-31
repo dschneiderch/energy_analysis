@@ -284,6 +284,23 @@ def _fetch(token: str, start: date, end: date) -> dict:
     return payload
 
 
+def _write_archive(payload: dict, start: date, end: date) -> Path:
+    """Write a new archive file under a unique name. Never overwrites: once a window ages out
+    of ecobee's retention, a re-fetch returns filler rows, and the older file is the only copy."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base = f"runtimeReport_{start.isoformat()}_{end.isoformat()}_fetched{stamp}"
+    data = json.dumps(payload).encode()
+    for i in range(1000):
+        path = config.ECOBEE_API_DIR / (f"{base}.json" if i == 0 else f"{base}_{i}.json")
+        try:
+            with open(path, "xb") as f:  # exclusive create: fails if the file exists
+                f.write(data)
+            return path
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"could not find an unused archive name for {base}")
+
+
 def _file_key(path: Path) -> str:
     st = path.stat()
     return f"{st.st_size}:{st.st_mtime_ns}"
@@ -330,8 +347,7 @@ def sync(conn, since: date | None = None) -> int:
     while cur <= today:
         end = min(cur + timedelta(days=CHUNK_DAYS - 1), today)
         payload = _fetch(token, cur, end)
-        path = config.ECOBEE_API_DIR / f"runtimeReport_{cur.isoformat()}_{end.isoformat()}.json"
-        path.write_text(json.dumps(payload))
+        path = _write_archive(payload, cur, end)
         n, _ = import_payload(conn, payload)
         store.log_sync(conn, "ecobee_file", path.name, _file_key(path), n, "ok")
         store.log_sync(conn, "ecobee", cur.isoformat(), end.isoformat(), n, "ok")

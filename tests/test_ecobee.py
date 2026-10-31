@@ -195,3 +195,51 @@ def test_access_token_rejected_refresh(tmp_path, monkeypatch):
     monkeypatch.setattr(ecobee.http, "request", lambda *a, **k: Resp())
     with pytest.raises(ecobee.EcobeeLoginRequired, match="energy ecobee-login"):
         ecobee.access_token()
+
+
+def test_sync_never_overwrites_archive_files(db, tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    api_dir, portal_dir = tmp_path / "api", tmp_path / "portal"
+    api_dir.mkdir()
+    portal_dir.mkdir()
+    monkeypatch.setattr(ecobee.config, "ECOBEE_API_DIR", api_dir)
+    monkeypatch.setattr(ecobee.config, "ECOBEE_PORTAL_DIR", portal_dir)
+    monkeypatch.setattr(ecobee, "access_token", lambda: "tok")
+    today = datetime.now(timezone.utc).date()
+    since = today - timedelta(days=40)
+    first_end = since + timedelta(days=30)
+    # The backup file sync's first window would previously have overwritten.
+    original = api_dir / f"runtimeReport_{since}_{first_end}.json"
+    good = f"{since},12:00:00,0,0,300,300,32.6,65,66,,heat,compressorHeatStage1On,,Sleep"
+    original.write_text(json.dumps(payload_with([good])))
+    original_bytes = original.read_bytes()
+    windows = []
+
+    def fake_fetch(token, start, end):
+        windows.append((start, end))
+        return payload_with([f"{start},12:00:00,0,0,0,0,30.1,,,,,,,"])  # aged-out filler
+    monkeypatch.setattr(ecobee, "_fetch", fake_fetch)
+
+    ecobee.sync(db, since=since)
+
+    assert windows == [(since, first_end), (first_end + timedelta(days=1), today)]
+    assert original.read_bytes() == original_bytes
+    new = sorted(p.name for p in api_dir.glob("*.json") if p != original)
+    assert len(new) == 2 and all("_fetched" in n for n in new)
+    assert new[0].startswith(f"runtimeReport_{since}_{first_end}_fetched")
+    # The backup's good row survived; filler rows were dropped.
+    assert db.execute("select count(*) from ecobee_interval").fetchone()[0] == 1
+    # A second sync imports nothing again from the files and still writes fresh unique names.
+    before = len(list(api_dir.glob("*.json")))
+    ecobee.sync(db, since=since)
+    assert original.read_bytes() == original_bytes
+    assert len(list(api_dir.glob("*.json"))) >= before
+    assert db.execute("select count(*) from sync_log where source='ecobee_file'").fetchone()[0] >= 3
+
+
+def test_write_archive_does_not_overwrite_same_second(tmp_path, monkeypatch):
+    from datetime import date
+    monkeypatch.setattr(ecobee.config, "ECOBEE_API_DIR", tmp_path)
+    a = ecobee._write_archive({"n": 1}, date(2026, 1, 1), date(2026, 1, 31))
+    b = ecobee._write_archive({"n": 2}, date(2026, 1, 1), date(2026, 1, 31))
+    assert a != b and json.loads(a.read_text()) == {"n": 1} and json.loads(b.read_text()) == {"n": 2}
