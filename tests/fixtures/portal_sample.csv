@@ -1,0 +1,9 @@
+﻿#,Thermostat,identifier,415522180035
+#,Thermostat,name,Upstairs
+#,Start,date,2025-01-01
+#,End,date,2025-01-31
+
+Date,Time,System Setting,System Mode,Calendar Event,Program Mode,Cool Set Temp (F),Heat Set Temp (F),Current Temp (F),Current Humidity (%RH),Outdoor Temp (F),Wind Speed (km/h),Cool Stage 1 (sec),Heat Stage 1 (sec),Fan (sec),DM Offset,Thermostat Temperature (F),Thermostat Humidity (%RH),Kids' Room (F),Kids' Room2,Office Guest Room (F),Office Guest Room2,Bedroom (F),Bedroom2
+2025-01-01,00:25:00,heat,heatOff,,Sleep,72,65,64,36,30.2,0,0,195,0,,64.6,36,64,1,62,0,64.5,0,
+2025-01-01,03:55:00,heat,heatStage1On,,Sleep,72,65,64.6,38,29.2,0,0,195,45,0.4,64.3,38,65.1,0,61.7,0,64.7,1,
+2025-01-02,01:40:00,heat,heatOff,,Sleep,72,65,64,37,29.8,0,0,195,0,,65,37,64,0,62,0,64.3,1,
