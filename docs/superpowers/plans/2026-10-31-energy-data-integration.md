@@ -53,11 +53,11 @@
 **Interfaces:**
 - Produces:
   - `energy.config`: every constant listed in Global Constraints, plus:
-    - Paths: `PROJECT_ROOT: Path`, `DB_PATH`, `SECRETS_DIR`, `ARCHIVE_DIR = PROJECT_ROOT/"data_archive"`, `INSULATION_DIR = PROJECT_ROOT.parent/"insulation_impact_analysis"`, `RATES_CSV = PROJECT_ROOT/"rates.csv"`
+    - Paths: `PROJECT_ROOT: Path`, `DB_PATH`, `SECRETS_DIR`, `ARCHIVE_DIR = PROJECT_ROOT/"data_archive"`, `RATES_CSV = PROJECT_ROOT/"rates.csv"`
     - Thermostat ids: `LR_ECOBEE_ID`, `UP_ECOBEE_ID`, `BEESTAT_LR = 47724`, `BEESTAT_UP = 47723`, `BEESTAT_OLD = 47722`, `LR_BEESTAT_START = date(2023,10,30)`
     - `VIRTUAL_CHANNELS = ("97", "98")`
     - `EXCLUDE_DATES_FILE = PROJECT_ROOT/"exclude_dates.txt"`
-    - `ORIGINAL_FILES_DIR = ARCHIVE_DIR/"original_files"`, and `GAS_FILES_DIR = PROJECT_ROOT` (Task 10 changes it to `ORIGINAL_FILES_DIR`)
+    - Archive subfolders (spec §10a): `ECOBEE_API_DIR = ARCHIVE_DIR/"ecobee_api_runtime"`, `ECOBEE_PORTAL_DIR = ARCHIVE_DIR/"ecobee_portal_csv"`, `GAS_DIR = ARCHIVE_DIR/"avista_gas"`, `BEESTAT_DIR = ARCHIVE_DIR/"beestat"`, `ORIGINAL_FILES_DIR = ARCHIVE_DIR/"original_files"`
     - `load_secrets() -> dict[str, str]`: merges `.env` key/values with `EMPORIA_USERNAME`/`EMPORIA_PASSWORD` from `keys.json`.
   - `energy.store`:
     - `connect(path: str | Path = DB_PATH) -> sqlite3.Connection`: creates every table in spec §5 if missing (`":memory:"` allowed), sets `row_factory = sqlite3.Row`, creates parent dirs.
@@ -114,7 +114,7 @@ def test_http_retries_5xx_then_returns(monkeypatch):
 - Create: `rates.csv`, `src/energy/sources/local_files.py`, `src/energy/calc/rates.py`, `tests/test_local_files.py`, `tests/test_rates.py`
 
 **Interfaces:**
-- Consumes: `store.connect`, `store.upsert`, `config.RATES_CSV`, `config.INSULATION_DIR`
+- Consumes: `store.connect`, `store.upsert`, `config.RATES_CSV`, `config.GAS_DIR`, `config.EXCLUDE_DATES_FILE`
 - Produces:
   - `local_files.parse_exclude_dates(text: str) -> list[tuple[date, date]]`: handles `YYYY-M-D -- YYYY-M-D` ranges, single dates, and `#` comments.
   - `local_files.sync(conn) -> int`: loads `rates.csv` → `rates`; `config.EXCLUDE_DATES_FILE` → `not_home` (deletes all rows with source `exclude_dates`, then inserts the file's current ranges, in one transaction); `gas_furnace_therms_history.csv` (columns `Date,Therms,HDD – 65F,In Town`) → `gas_daily.therms`/`in_town`; raw `avista-gas-daily-*.csv` CCF values → `gas_daily.ccf`, keyed by the local date of each reading.
@@ -126,6 +126,8 @@ def test_http_retries_5xx_then_returns(monkeypatch):
     - `basic: float`
     - `is_fallback: bool`: True when `day` is after a year past the newest effective date. Then the newest rate is used and the report adds a note.
   - Returns `None` when `day` is before the oldest row.
+
+- [ ] **Step 0: Move the gas inputs into place**: `mkdir -p data_archive/avista_gas && mv avista-gas-daily-*.csv gas_furnace_therms_history.csv data_archive/avista_gas/`. Move only the CSVs; the `.ods` copies go to `original_files/` in Task 10.
 
 - [ ] **Step 1: Transcribe `rates.csv`.** Download `https://www.myavista.com/-/media/myavista/content-documents/our-rates-and-tariffs/id/ideratehist9126.pdf` into `data/`, then run `pdftotext -layout`. Do the same for the existing `IDGRatehist9126.pdf`. Write one row per effective date, component and tier for:
   - electric Schedule 1, every change from the one in effect on 2021-09-01 onward
@@ -158,6 +160,12 @@ def test_exclude_dates_resync_adds_and_removes(db, tmp_path, monkeypatch):
     f.write_text("2026-11-20 -- 2026-11-27\n"); local_files.sync(db)
     assert db.execute("select start_date, end_date from not_home where source='exclude_dates'").fetchall() == [("2026-11-20", "2026-11-27")]
 
+def test_gas_files_read_from_configured_dir(db, tmp_path, monkeypatch):
+    (tmp_path / "gas_furnace_therms_history.csv").write_text("Date,Therms,HDD – 65F,In Town\n2022-12-15,3.5,40,1\n")
+    monkeypatch.setattr(config, "GAS_DIR", tmp_path)
+    local_files.sync(db)
+    assert db.execute("select therms from gas_daily where date='2022-12-15'").fetchone()[0] == 3.5
+
 def test_rate_on_known_dates(db):
     local_files.sync(db)
     r = rate_on(db, "electric", "1", date(2025, 12, 15))
@@ -172,7 +180,7 @@ def test_rate_outside_table(db):          # Review Focus 5
 ```
 
 - [ ] **Step 3: Run the tests to confirm they fail**: `uv run pytest tests/test_local_files.py tests/test_rates.py -v`. Expected: FAIL.
-- [ ] **Step 4: Implement `local_files.py` and `calc/rates.py`.** Gas CSVs are read from `config.GAS_FILES_DIR`, looked up at call time, never copied into a module-level constant.
+- [ ] **Step 4: Implement `local_files.py` and `calc/rates.py`.** Gas CSVs are read from `config.GAS_DIR`, looked up at call time, never copied into a module-level constant.
 - [ ] **Step 5: Run the tests to confirm they pass.** Expected: all pass.
 - [ ] **Step 6: Commit**: `git add rates.csv src tests && git commit -m "feat: local files loader and Avista rate lookup"`
 
@@ -277,7 +285,7 @@ def test_parse_open_meteo():
     | `count` | `interval_count` |
 
     `thermostat_id` stays the beestat int id, `source` is `"beestat"`, and rows with `deleted` true are skipped.
-  - `beestat.sync(conn, since: date | None = None) -> int`: one call to `https://api.beestat.io/?api_key=…&resource=runtime_thermostat_summary&method=read_id`, upserting every row.
+  - `beestat.sync(conn, since: date | None = None) -> int`: one call to `https://api.beestat.io/?api_key=…&resource=runtime_thermostat_summary&method=read_id`. Saves the raw response as `config.BEESTAT_DIR/"runtime_thermostat_summary_<YYYY-MM-DD>.json"`, then upserts every row.
 
 - [ ] **Step 1: Write the failing test** using one row copied from `data_archive/beestat/runtime_thermostat_summary_2026-10-31.json` (thermostat 47722, date 2022-11-25). Assert `aux_heat_s == 7140`, `fan_s == 7770` and `avg_outdoor_f == 39.6`.
 - [ ] **Step 2: Run it to confirm it fails.**
@@ -318,12 +326,14 @@ def test_parse_open_meteo():
   - `ecobee.login_interactive() -> None`: `pyecobee.Ecobee(config={"API_KEY": None})`, sets username/password, calls `request_tokens_web()`. On `EcobeeAuthMfaRequiredError`, prompts for the code via `input()` and calls `submit_mfa_code`. Saves `{"access_token", "refresh_token"}` to `SECRETS_DIR/"ecobee_tokens.json"` with mode 600.
   - `ecobee.access_token() -> str`: POST to `https://auth.ecobee.com/oauth/token` with `grant_type=refresh_token` and `client_id=183eORFPlXyz9BbDZwqexHPBQoVjgadh`, saving any rotated refresh token. A missing token file or HTTP 4xx raises `EcobeeLoginRequired("run `energy ecobee-login`")`.
   - `ecobee.sync(conn, since: date | None = None) -> int`, in this order:
-    1. import every portal CSV in `INSULATION_DIR/"data"`
-    2. import every JSON file in `ARCHIVE_DIR/"ecobee_api_runtime"`
+    1. import every portal CSV in `config.ECOBEE_PORTAL_DIR`
+    2. import every JSON file in `config.ECOBEE_API_DIR`
     3. call the API in 31-day chunks, from `since`, else the latest API ts minus 2 days, else today minus 600 days, through today. Request columns `auxHeat1,compCool1,compHeat1,fan,outdoorTemp,zoneAveTemp,zoneHeatTemp,zoneCoolTemp,hvacMode,zoneHvacMode,zoneCalendarEvent,zoneClimate` with `includeSensors: true`.
     4. call `derive_vacations`.
 
-    Each new API response is also written to `ARCHIVE_DIR/"ecobee_api_runtime"` as `runtimeReport_<start>_<end>.json`.
+    Each new API response is also written to `config.ECOBEE_API_DIR` as `runtimeReport_<start>_<end>.json`.
+
+- [ ] **Step 0: Copy the portal CSVs into place**: `mkdir -p data_archive/ecobee_portal_csv && cp -p ../insulation_impact_analysis/data/report-*.csv data_archive/ecobee_portal_csv/`. Copy, don't move; the other folder stays untouched. Expected: 10 files.
 
 - [ ] **Step 1: Determine the ecobee timestamp basis.** Write a throwaway script, not committed, that loads one January backup file and `emporia_hourly` (run Task 3's sync first). Correlate the hourly sums of Living Room `compHeat1` with hourly channel 7 + 8 kWh, with ecobee times read as (a) UTC and (b) `America/Los_Angeles`. Set `ECOBEE_TS_IS_UTC` to the reading with the higher correlation, and record both correlation values in a code comment next to it. The sensor block in the backup starts at the previous day's 17:00, so check sensor timestamps the same way. If they differ from the runtime rows, add a separate `ECOBEE_SENSOR_TS_IS_UTC`.
 
@@ -510,46 +520,31 @@ def test_sync_continues_after_ecobee_login_failure(monkeypatch, capsys):   # Rev
 
 ---
 
-### Task 10: Archive the original files (spec §10a)
+### Task 10: Move unread files to `original_files/` (spec §10a)
 
-**Files:**
-- Modify: `src/energy/config.py` (`GAS_FILES_DIR = ORIGINAL_FILES_DIR`)
-- Test: `tests/test_local_files.py`
+**Files:** no code changes. This task only moves files.
 
 **Interfaces:**
-- Consumes: `config.GAS_FILES_DIR`, `local_files.sync`, `cli.main`
+- Consumes: `cli.main` (for verification)
 
-Do this task only after Task 9's acceptance step passes.
+Do this task only after Task 9's acceptance step passes, and only after the user has closed `heat_energy.ods`. A `.~lock.heat_energy.ods#` file in the root means it is still open; stop and ask.
 
-- [ ] **Step 1: Write the failing test**
-
-```python
-def test_gas_files_read_from_configured_dir(db, tmp_path, monkeypatch):
-    (tmp_path / "gas_furnace_therms_history.csv").write_text("Date,Therms,HDD – 65F,In Town\n2022-12-15,3.5,40,1\n")
-    monkeypatch.setattr(config, "GAS_FILES_DIR", tmp_path)
-    local_files.sync(db)
-    assert db.execute("select therms from gas_daily where date='2022-12-15'").fetchone()[0] == 3.5
-
-def test_gas_dir_is_archive():
-    assert config.GAS_FILES_DIR == config.ORIGINAL_FILES_DIR
-```
-
-- [ ] **Step 2: Run them.** Expected: the first passes (Task 2 already reads from `GAS_FILES_DIR`), the second fails.
-- [ ] **Step 3: Record the "before" state**: `uv run energy day 2022-12-15 --json > data/before_gas.json` and `sqlite3 data/energy.sqlite "select count(*), sum(therms) from gas_daily"`.
-- [ ] **Step 4: Move the files** with `mkdir -p data_archive/original_files` and `mv`. Move exactly these, keeping names and folders:
-  - the 4 `avista-gas-daily-*` CSV/ODS pairs
-  - `gas_furnace_therms_history.csv`
+- [ ] **Step 1: Record the "before" state**:
+  - `uv run energy day 2022-12-15 --json > data/before_gas.json`
+  - `uv run energy day 2026-01-15 --json > data/before_hp.json`
+  - `sqlite3 data/energy.sqlite "select (select count(*) from gas_daily), (select count(*) from ecobee_interval), (select count(*) from not_home)"`
+- [ ] **Step 2: Move the files** with `mkdir -p data_archive/original_files` and `mv`. Move exactly these, keeping names and folders:
+  - the 4 `avista-gas-daily-*.ods` files
   - `4BA438-Emporia_Vue-1DAY.ods`, `heat_energy.ods`
   - the 5 `emporia*` folders and zips
   - the 7 `KPUW_*.csv` files
   - `IDGRatehist9126.pdf`, `IDGShortcuts9126.pdf`, and `data/ideratehist9126.pdf`
 
-  `exclude_dates.txt` stays in the root. Nothing is deleted. Anything else unexpected in the project root is listed for the user, not moved.
-- [ ] **Step 5: Set `GAS_FILES_DIR = ORIGINAL_FILES_DIR`** in `config.py`.
-- [ ] **Step 6: Verify**:
+  Nothing is deleted. Anything else unexpected in the project root is listed for the user, not moved.
+- [ ] **Step 3: Verify**:
   - `uv run pytest -v`: all pass.
-  - `uv run energy sync local`, then the same `sqlite3` count/sum query matches Step 3.
-  - `uv run energy day 2022-12-15 --json` matches `data/before_gas.json`.
-  - `ls -A` of the project root shows only the files spec §10a says stay.
-  - `git status` shows only the `config.py` and test changes.
-- [ ] **Step 7: Commit**: `git add src tests && git commit -m "chore: archive original data files; read gas history from archive"`
+  - `uv run energy sync local ecobee`, then the Step 1 count query gives the same numbers.
+  - Both `energy day` outputs match the saved JSON files.
+  - `ls -A` of the project root shows only the files spec §10a lists as staying.
+  - `git status` is clean.
+- [ ] **Step 4: Report** the final `data_archive/` tree (`find data_archive -maxdepth 1`, plus file counts per folder) to the user. There is nothing to commit, because `data_archive/` is gitignored.

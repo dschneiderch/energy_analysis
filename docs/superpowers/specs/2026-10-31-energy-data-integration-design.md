@@ -40,13 +40,13 @@ These come from the user and from the data exploration on 2026-10-31.
 |---|---|---|---|
 | ecobee runtime report (5-min) | `python-ecobee-api` web login (username/password + authenticator code once, then refresh token) → `GET api.ecobee.com/1/runtimeReport` | rolling ~18 months (currently from 2025-04-16) | unofficial login route; ≤31 days per request; older data ages out daily |
 | ecobee API backup | `data_archive/ecobee_api_runtime/*.json` (saved 2026-10-31, includes remote sensors) | 2025-04-16 → 2026-10-31 | already-fetched raw responses |
-| ecobee portal CSV exports | `../insulation_impact_analysis/data/report-<thermostatId>-<start>-to-<end>.csv` | Upstairs: Dec 2024–Apr 2025, Nov 8–Dec 9 2025, Jan 2026. Living Room: Nov 2024, Nov 2025, Jan 2026 | rows end in a trailing comma (read with `index_col=False`, header after 5 lines); values match the API on overlap |
+| ecobee portal CSV exports | `data_archive/ecobee_portal_csv/report-<thermostatId>-<start>-to-<end>.csv` (copied from `../insulation_impact_analysis/data/`) | Upstairs: Dec 2024–Apr 2025, Nov 8–Dec 9 2025, Jan 2026. Living Room: Nov 2024, Nov 2025, Jan 2026 | rows end in a trailing comma (read with `index_col=False`, header after 5 lines); values match the API on overlap |
 | beestat daily summaries | `api.beestat.io` with `BEESTAT_API_KEY`, `runtime_thermostat_summary.read_id` | 47722: 2022-11-25 → 2023-11-01; 47723: 2023-03-25 →; 47724: 2023-10-30 → | daily sums of compressor heat/cool, aux, fan, outdoor and indoor temperature; matches the ecobee API (corr 0.994, mean diff 0.03 h/day). beestat's 5-min data only goes back about 13 months and is not used. API is officially "unstable"; ~30 requests/minute |
 | Emporia Vue (device 219614) | PyEmVue with `keys.json` credentials | hourly kWh from 2023-04-15 for all channels including mains (`1,2,3`) | ≤90 days per request at daily scale, ≤30 days at hourly scale |
 | Grid carbon (Electricity Maps zone `US-NW-AVA`) | Home Assistant WebSocket `recorder/statistics_during_period`, hourly `mean` of `sensor.electricity_maps_co2_intensity` and `sensor.electricity_maps_grid_fossil_fuel_percentage`, using `HA_TOKEN` | 2024-02 → now, ~complete | HA raw history only goes back ~10 days; use long-term statistics only |
 | Weather | Open-Meteo archive API (`archive-api.open-meteo.com/v1/archive`), hourly `temperature_2m` (°F) and `wind_speed_10m` (mph), timezone UTC | any date | modeled reanalysis at the configured coordinates; archive lags a few days, so fall back to the forecast API (`past_days`) for recent dates and tag those rows |
 | Avista rates | `rates.csv` (in git), hand-transcribed from Avista's Idaho rate-history PDFs: electric Schedule 1 (`ideratehist9126.pdf`) and gas Schedule 101 (`IDGRatehist9126.pdf`) | all rate changes covering 2021 → now | OpenEI is not used (no Idaho Avista data after 2018, no gas) |
-| Gas use | `gas_furnace_therms_history.csv` (therms per day), plus raw `avista-gas-daily-*.csv` (CCF meter reads ~16:00) | Dec 2021 – May 2023 with gaps | |
+| Gas use | `data_archive/avista_gas/`: `gas_furnace_therms_history.csv` (therms per day), plus raw `avista-gas-daily-*.csv` (CCF meter reads ~16:00) | Dec 2021 – May 2023 with gaps | |
 | Not-home days | `exclude_dates.txt` in the project root (committed; the user keeps adding to it), plus ecobee vacation events | 2021-12 → present (file), plus events | vacation events are long numeric ids, hex ids, or "Vacation"; their heat setpoint is 55°F |
 
 Secrets live in `.env` (`HA_TOKEN`, `ECOBEE_USERNAME`, `ECOBEE_PASSWORD`, `BEESTAT_API_KEY`) and `keys.json` (Emporia). Saved tokens go in `.secrets/`. All of these are gitignored.
@@ -126,7 +126,7 @@ fuel,schedule,effective_date,component,tier_min,tier_max,rate_per_unit,unit
 | Source | What sync does |
 |---|---|
 | ecobee | (1) One-time import of the API backup JSON and portal CSVs. (2) Fetch from the API in 31-day chunks, back to the oldest date the API still returns. Columns include the 5-min runtime and state fields listed in §5, plus remote sensors. |
-| beestat | Fetch all daily summaries in one `read_id` call. Upsert all rows, since beestat revises recent days. |
+| beestat | Fetch all daily summaries in one `read_id` call, save the raw response to `data_archive/beestat/`, and upsert all rows, since beestat revises recent days. |
 | Emporia | Hourly kWh for every channel on device 219614, in 30-day chunks, from 2023-04-15. |
 | HA carbon | Hourly means for both statistics, from 2024-02-01. |
 | Weather | Hourly from 2021-11-01 (one month before the gas data starts). |
@@ -234,7 +234,7 @@ Human-readable table by default, or `--json`. Every field is either a value or `
 | `HDD_BASE_F`, `CDD_BASE_F` | 65, 65 | degree-day bases |
 | `HEATING_DAY_MIN_HDD` | 5 | heating-day rule without thermostat data |
 | `EMPORIA_DEVICE_GID`, `HP_CHANNELS`, `MAINS_CHANNEL` | 219614, ("7","8"), "1,2,3" | energy channels |
-| `INSULATION_DIR` | `../insulation_impact_analysis` | portal CSVs |
+| `ECOBEE_API_DIR`, `ECOBEE_PORTAL_DIR`, `GAS_DIR`, `BEESTAT_DIR`, `ORIGINAL_FILES_DIR` | subfolders of `data_archive/` per §10a | source file locations |
 | `EXCLUDE_DATES_FILE` | `exclude_dates.txt` in the project root | not-home date ranges |
 
 ## 9. Error handling
@@ -274,19 +274,21 @@ Human-readable table by default, or `--json`. Every field is either a value or `
 
 Gas outputs are checked with a gas-era date such as `energy day 2022-12-15`.
 
-## 10a. Folder cleanup
+## 10a. File layout and folder cleanup
 
-Once the database is fully synced and the acceptance checks pass, every original data file in the project root moves (not deletes) into `data_archive/original_files/`, keeping its name and folder structure. That covers:
-- the Avista gas CSV/ODS files
-- `gas_furnace_therms_history.csv`
-- the Emporia export folders and zips
-- the KPUW HDD CSVs
-- `heat_energy.ods`, `4BA438-Emporia_Vue-1DAY.ods`
-- the Avista rate PDFs, plus the downloaded electric rate PDF
+**Rule:** every file that `energy sync` reads lives under `data_archive/<source>/`. Files that sync never reads go to `data_archive/original_files/`. The code never reads from `../insulation_impact_analysis`.
 
-These stay where they are: `.env`, `keys.json`, `.claude/`, `energy_analysis.code-workspace`, `data_archive/`, `data/energy.sqlite`, and the project's own files (`src/`, `tests/`, `docs/`, `pyproject.toml`, `uv.lock`, `rates.csv`, `exclude_dates.txt`, `.gitignore`).
+| Folder | Contents | Read by sync? |
+|---|---|---|
+| `data_archive/ecobee_api_runtime/` | ecobee API JSON responses (the 2026-10-31 backup plus every new response sync saves) | yes |
+| `data_archive/ecobee_portal_csv/` | `report-*.csv` copied (not moved) from `../insulation_impact_analysis/data/` | yes |
+| `data_archive/avista_gas/` | `avista-gas-daily-*.csv` and `gas_furnace_therms_history.csv`, moved from the project root | yes |
+| `data_archive/beestat/` | raw beestat summary responses, one JSON per sync (a backup; sync loads from the API, not from these files) | written, not read |
+| `data_archive/original_files/` | everything else from the project root: the gas `.ods` copies, Emporia export folders and zips, KPUW HDD CSVs, `heat_energy.ods`, `4BA438-Emporia_Vue-1DAY.ods`, the Avista rate PDFs (including the downloaded electric one) | no |
 
-The gas files are re-read on every sync, so `config.GAS_FILES_DIR` points at the archive after the move. Files in `../insulation_impact_analysis` are not moved.
+The project root keeps only: `.env`, `keys.json`, `.claude/`, `energy_analysis.code-workspace`, `data_archive/`, `data/` (the database), `exclude_dates.txt`, `rates.csv`, and the project's own files (`src/`, `tests/`, `docs/`, `pyproject.toml`, `uv.lock`, `.gitignore`).
+
+Files are moved or copied, never deleted. The move to `original_files/` happens after the acceptance checks pass.
 
 ## 11. Known limitations
 
