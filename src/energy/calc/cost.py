@@ -26,10 +26,10 @@ def electric_cost(rates: RateSet, prior_house_kwh: float, rest_of_house_kwh: flo
 
 
 def gas_day(conn, day: date) -> dict | None:
-    row = conn.execute("SELECT therms FROM gas_daily WHERE date=?", (day.isoformat(),)).fetchone()
+    row = conn.execute("SELECT ccf FROM gas_daily WHERE date=?", (day.isoformat(),)).fetchone()
     if row is None or row[0] is None:
         return None
-    therms = row[0]
+    therms = row[0] * config.THERMS_PER_CCF
     kwh_equiv = therms * config.KWH_PER_THERM
     rs = rate_on(conn, "gas", "101", day)
     out = {"gas_therms": therms, "gas_kwh_equiv": kwh_equiv,

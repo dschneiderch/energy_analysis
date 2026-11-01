@@ -82,8 +82,12 @@ def _load_gas(conn) -> int:
     gas_dir = config.GAS_DIR
     if not gas_dir.exists():
         return 0
-    reads: dict[datetime, float] = {}  # keyed by read time, so overlapping downloads count once
-    for f in sorted(gas_dir.glob("avista-gas-daily-*.csv")):
+    # Keyed by read time, so overlapping downloads count once; a read two files disagree on fails the sync.
+    reads: dict[datetime, tuple[float, str]] = {}
+    files = sorted(gas_dir.glob("avista-gas-daily-*.csv"))
+    if not files:
+        raise ValueError(f"no avista-gas-daily-*.csv files in {gas_dir}; gas table left unchanged")
+    for f in files:
         with open(f, newline="", encoding="utf-8-sig") as fh:
             started = False
             for row in csv.reader(fh):
@@ -93,20 +97,24 @@ def _load_gas(conn) -> int:
                 if len(row) < 2 or not row[0].strip():
                     continue
                 v = _num(row[1])
-                if v is not None:
-                    reads[datetime.strptime(row[0].strip(), "%Y-%m-%d %H:%M:%S")] = v
+                if v is None:
+                    continue
+                ts = datetime.strptime(row[0].strip(), "%Y-%m-%d %H:%M:%S")
+                if ts in reads and reads[ts][0] != v:
+                    raise ValueError(f"gas files disagree on the {ts} read: {reads[ts][1]} has {reads[ts][0]}, "
+                                     f"{f.name} has {v}")
+                reads[ts] = (v, f.name)
     ccf: dict[date, float] = {}
-    for ts, v in reads.items():
+    for ts, (v, _) in reads.items():
         ccf[ts.date()] = ccf.get(ts.date(), 0.0) + v
-    with conn:  # gas history is final: only add dates not stored yet
-        cur = conn.executemany("INSERT OR IGNORE INTO gas_daily (date, therms, ccf) VALUES (?, ?, ?)",
-                               [(d.isoformat(), v * config.THERMS_PER_CCF, v) for d, v in sorted(ccf.items())])
-    return cur.rowcount
+    with conn:  # single transaction: replace the table with the files' contents
+        conn.execute("DELETE FROM gas_daily")
+        return store.upsert(conn, "gas_daily", [{"date": d.isoformat(), "ccf": v} for d, v in sorted(ccf.items())])
 
 
 def sync(conn, since=None) -> int:
     """Reload all local reference files (always in full; `since` is accepted and ignored)."""
     rates, not_home, gas = _load_rates(conn), _load_not_home(conn), _load_gas(conn)
     print(f"  {config.RATES_CSV.name}: {rates} rates; {config.EXCLUDE_DATES_FILE.name}: {not_home} ranges; "
-          f"gas: {gas} new days", flush=True)
+          f"gas: {gas} days", flush=True)
     return rates + not_home + gas

@@ -36,8 +36,9 @@ Sources include `local`, `emporia`, `weather`, `ecobee`, `beestat`, `ha_carbon`;
 
 ## Where data lives
 
-- `data/energy.sqlite`: the database (rebuildable from the archive plus the APIs).
-- `data_archive/<source>/`: raw downloads, never overwritten (spec section 10a in `docs/superpowers/specs/2026-10-31-energy-data-integration-design.md`).
+- `data_archive/<source>/`: raw downloads, never overwritten or edited. This is the source of truth and the folder to back up. ecobee, Emporia and Home Assistant data expire upstream, and the beestat API is provisional, so every fetch from them is written here before it is imported (spec section 10a in `docs/superpowers/specs/2026-10-31-energy-data-integration-design.md`). Each beestat sync asks beestat to refresh the two live thermostats (`runtime.sync`), then reads only the last week of daily summaries (beestat can lag up to a week) and archives that raw response. `runtime_thermostat_summary_2026-10-31.json` is the full-history baseline; keep all of them. Weather is fetched again on a rebuild.
+- `data/energy.sqlite`: the database, a disposable copy built from the archive, the files below, and the weather API. After a schema change, or if in doubt, delete it and run `uv run energy sync`.
+- `data_archive/avista_gas/avista-gas-daily-*.csv`: Avista gas downloads; `gas_daily` is reloaded from them on every `local` sync. Add new downloads as new files. Overlapping files are fine, but two files with different values for the same reading fail the sync.
 - `exclude_dates.txt`: hand-maintained not-home date ranges (`YYYY-M-D` or `start -- end`); re-read on every sync. A bad line fails the sync with its line number.
 - `rates.csv`: hand-transcribed from Avista's Idaho rate-history PDFs. Update it when rates change; it replaces the `rates` table on every `local` sync, and every effective date needs an `energy` row. download from https://www.myavista.com/about-us/our-rates-and-tariffs/idaho-rates (updated 10-1-2026 https://www.myavista.com/-/media/myavista/content-documents/our-rates-and-tariffs/id/ideratehist10126.pdf)
 

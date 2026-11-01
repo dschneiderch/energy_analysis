@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 import websockets
 
-from .. import config, store
+from .. import archive, config, store
 
 RECV_TIMEOUT_S = 60
 CO2_ID = "sensor.electricity_maps_co2_intensity"
@@ -57,6 +57,8 @@ async def _fetch(token: str, windows: list[tuple[datetime, datetime]]) -> list[d
 
 
 def sync(conn, since: date | None = None) -> int:
+    total = archive.import_new(conn, "ha_carbon_file", sorted(config.HA_CARBON_DIR.glob("*.json")),
+                               lambda p: import_windows(conn, json.loads(p.read_text())))
     if since:
         start_day = since
     else:
@@ -70,9 +72,20 @@ def sync(conn, since: date | None = None) -> int:
         cur = nxt
     token = config.load_secrets()["HA_TOKEN"]
     results = asyncio.run(_fetch(token, windows))
+    # Archive before import: the Home Assistant box is the only other copy.
+    payload = {"windows": [{"start": a.strftime(_FMT), "end": b.strftime(_FMT), "result": res}
+                           for (a, b), res in zip(windows, results)]}
+    path = archive.write_json(config.HA_CARBON_DIR, f"statistics_{start_day}_{end.date()}", payload)
+    n = import_windows(conn, payload)
+    archive.log_imported(conn, "ha_carbon_file", path, n)
+    return total + n
+
+
+def import_windows(conn, payload: dict) -> int:
+    """Upsert an archived set of statistics_during_period results."""
     total = 0
-    for (a, b), res in zip(windows, results):
-        n = store.upsert(conn, "grid_carbon_hourly", parse_statistics(res))
-        store.log_sync(conn, "ha_carbon", a.strftime(_FMT), b.strftime(_FMT), n, "ok")
+    for w in payload["windows"]:
+        n = store.upsert(conn, "grid_carbon_hourly", parse_statistics(w["result"]))
+        store.log_sync(conn, "ha_carbon", w["start"], w["end"], n, "ok")
         total += n
     return total

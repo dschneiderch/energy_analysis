@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS weather_hourly (
     ts TEXT NOT NULL PRIMARY KEY, temp_f REAL, wind_mph REAL, source TEXT
 );
 CREATE TABLE IF NOT EXISTS gas_daily (
-    date TEXT NOT NULL PRIMARY KEY, therms REAL, ccf REAL
+    date TEXT NOT NULL PRIMARY KEY, ccf REAL
 );
 CREATE TABLE IF NOT EXISTS rates (
     fuel TEXT NOT NULL, schedule TEXT NOT NULL, effective_date TEXT NOT NULL,

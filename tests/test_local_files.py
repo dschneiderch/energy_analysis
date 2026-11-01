@@ -27,15 +27,14 @@ def test_exclude_dates_resync_adds_and_removes(db, tmp_path, monkeypatch):
     assert [tuple(r) for r in rows] == [("2026-11-20", "2026-11-27")]
 
 
-def test_gas_therms_from_ccf(db, tmp_path, monkeypatch):
+def test_gas_ccf_per_day(db, tmp_path, monkeypatch):
     (tmp_path / "avista-gas-daily-x.csv").write_text(
         'Name, X\nFuel Type,Gas\n,\nMeter Badge Number: 1,\nDate/Time,CCFC  \n'
         '2023-02-28 15:59:22,2\n2023-03-01 15:59:22,4\n,\n')
     monkeypatch.setattr(config, "GAS_DIR", tmp_path)
     local_files.sync(db)
-    rows = db.execute("select date, therms, ccf from gas_daily order by date").fetchall()
-    assert [tuple(r) for r in rows] == [("2023-02-28", pytest.approx(2 * 1.038), 2.0),
-                                        ("2023-03-01", pytest.approx(4 * 1.038), 4.0)]
+    rows = db.execute("select date, ccf from gas_daily order by date").fetchall()
+    assert [tuple(r) for r in rows] == [("2023-02-28", 2.0), ("2023-03-01", 4.0)]
 
 
 def test_overlapping_gas_files_count_each_read_once(db, tmp_path, monkeypatch):
@@ -76,16 +75,26 @@ def test_rates_blank_energy_rate_raises(db, tmp_path, monkeypatch):
         local_files._load_rates(db)
 
 
-def test_gas_resync_only_adds_new_dates(db, tmp_path, monkeypatch):
+def test_gas_resync_replaces_table_with_files(db, tmp_path, monkeypatch):
     f = tmp_path / "avista-gas-daily-x.csv"
     f.write_text("Date/Time,CCFC\n2023-01-05 16:00:00,1\n")
     monkeypatch.setattr(config, "GAS_DIR", tmp_path)
-    db.execute("insert into gas_daily (date, therms, ccf) values ('2023-01-04', 9, 9)")
+    db.execute("insert into gas_daily (date, ccf) values ('2023-01-04', 9)")
     assert local_files._load_gas(db) == 1
-    f.write_text("Date/Time,CCFC\n2023-01-04 16:00:00,1\n2023-01-05 16:00:00,5\n2023-01-06 16:00:00,2\n")
-    assert local_files._load_gas(db) == 1
+    f.write_text("Date/Time,CCFC\n2023-01-05 16:00:00,5\n2023-01-06 16:00:00,2\n")
+    assert local_files._load_gas(db) == 2
     rows = db.execute("select date, ccf from gas_daily order by date").fetchall()
-    assert [tuple(r) for r in rows] == [("2023-01-04", 9.0), ("2023-01-05", 1.0), ("2023-01-06", 2.0)]
+    assert [tuple(r) for r in rows] == [("2023-01-05", 5.0), ("2023-01-06", 2.0)]
+
+
+def test_gas_files_that_disagree_fail_and_keep_table(db, tmp_path, monkeypatch):
+    (tmp_path / "avista-gas-daily-a.csv").write_text("Date/Time,CCFC\n2023-01-05 16:00:00,1\n")
+    monkeypatch.setattr(config, "GAS_DIR", tmp_path)
+    local_files._load_gas(db)
+    (tmp_path / "avista-gas-daily-b.csv").write_text("Date/Time,CCFC\n2023-01-05 16:00:00,7\n")
+    with pytest.raises(ValueError, match="avista-gas-daily-a.csv has 1.0, avista-gas-daily-b.csv has 7.0"):
+        local_files._load_gas(db)
+    assert db.execute("select ccf from gas_daily").fetchone()[0] == 1.0
 
 
 def test_parse_exclude_dates_errors_name_line():
@@ -93,3 +102,12 @@ def test_parse_exclude_dates_errors_name_line():
         parse_exclude_dates("2025-1-1\n2025-5-3 -- 2025-5-1\n")
     with pytest.raises(ValueError, match=r"line 2.*garbage"):
         parse_exclude_dates("2025-1-1\ngarbage\n")
+
+
+def test_gas_folder_without_matching_files_fails_and_keeps_table(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "GAS_DIR", tmp_path)
+    db.execute("insert into gas_daily (date, ccf) values ('2023-01-04', 9)")
+    (tmp_path / "avista-gas-hourly-renamed.csv").write_text("Date/Time,CCFC\n2023-01-05 16:00:00,1\n")
+    with pytest.raises(ValueError, match="gas table left unchanged"):
+        local_files._load_gas(db)
+    assert db.execute("select ccf from gas_daily").fetchone()[0] == 9.0

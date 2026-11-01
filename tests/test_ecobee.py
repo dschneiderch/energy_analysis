@@ -237,11 +237,10 @@ def test_sync_never_overwrites_archive_files(db, tmp_path, monkeypatch):
     assert db.execute("select count(*) from sync_log where source='ecobee_file'").fetchone()[0] >= 3
 
 
-def test_write_archive_does_not_overwrite_same_second(tmp_path, monkeypatch):
-    from datetime import date
-    monkeypatch.setattr(ecobee.config, "ECOBEE_API_DIR", tmp_path)
-    a = ecobee._write_archive({"n": 1}, date(2026, 1, 1), date(2026, 1, 31))
-    b = ecobee._write_archive({"n": 2}, date(2026, 1, 1), date(2026, 1, 31))
+def test_write_archive_does_not_overwrite_same_second(tmp_path):
+    from energy import archive
+    a = archive.write_json(tmp_path, "runtimeReport_2026-01-01_2026-01-31", {"n": 1})
+    b = archive.write_json(tmp_path, "runtimeReport_2026-01-01_2026-01-31", {"n": 2})
     assert a != b and json.loads(a.read_text()) == {"n": 1} and json.loads(b.read_text()) == {"n": 2}
 
 
@@ -266,3 +265,30 @@ def test_sync_derives_vacations_even_when_login_required(db, tmp_path, monkeypat
     with pytest.raises(ecobee.EcobeeLoginRequired):
         ecobee.sync(db)
     assert db.execute("select count(*) from not_home where source='ecobee_vacation'").fetchone()[0] == 1
+
+
+def test_interrupted_archive_write_leaves_no_json(tmp_path, monkeypatch):
+    from pathlib import Path
+    from energy import archive
+    real = Path.write_bytes
+
+    def half_then_fail(self, data):
+        real(self, data[: len(data) // 2])
+        raise KeyboardInterrupt
+    monkeypatch.setattr(Path, "write_bytes", half_then_fail)
+    with pytest.raises(KeyboardInterrupt):
+        archive.write_json(tmp_path, "runtimeReport_2026-01-01_2026-01-31", {"rows": list(range(100))})
+    assert list(tmp_path.glob("*.json")) == []
+
+
+def test_api_start_resumes_from_older_thermostat(db):
+    from datetime import date
+    from energy import config
+    today = date(2026, 11, 1)
+    assert ecobee._api_start(db, None, today) == date(2025, 3, 11)  # nothing stored: default lookback
+    store.upsert(db, "ecobee_interval", [
+        {"thermostat_id": config.LR_ECOBEE_ID, "ts": "2026-10-31T12:00:00Z", "source": "api"},
+        {"thermostat_id": config.UP_ECOBEE_ID, "ts": "2026-10-20T12:00:00Z", "source": "api"},
+        {"thermostat_id": config.UP_ECOBEE_ID, "ts": "2026-10-30T12:00:00Z", "source": "portal_csv"}])
+    assert ecobee._api_start(db, None, today) == date(2026, 10, 18)
+    assert ecobee._api_start(db, date(2026, 1, 1), today) == date(2026, 1, 1)

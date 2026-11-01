@@ -14,6 +14,8 @@ ECOBEE_API_DIR = ARCHIVE_DIR / "ecobee_api_runtime"
 ECOBEE_PORTAL_DIR = ARCHIVE_DIR / "ecobee_portal_csv"
 GAS_DIR = ARCHIVE_DIR / "avista_gas"
 BEESTAT_DIR = ARCHIVE_DIR / "beestat"
+EMPORIA_DIR = ARCHIVE_DIR / "emporia"
+HA_CARBON_DIR = ARCHIVE_DIR / "ha_carbon"
 ORIGINAL_FILES_DIR = ARCHIVE_DIR / "original_files"
 
 HA_URL = "ws://192.168.50.206:8123/api/websocket"

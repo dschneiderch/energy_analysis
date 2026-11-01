@@ -1,11 +1,16 @@
-"""Daily runtime summaries from the beestat API (covers pre-2023 thermostat history)."""
+"""Daily runtime summaries from the beestat API (covers pre-2023 thermostat history).
+API docs: https://beestat.notion.site/API-Documentation-e4a7746e6a3f45dbb58ea6b45b8f9744"""
 import json
-from datetime import date
+from datetime import date, timedelta
 
-from .. import config, http, store
+from .. import archive, config, http, store
 
 URL = "https://api.beestat.io/"
 USER_AGENT = "energy-analysis/0.1"
+# Only these get a runtime.sync; the retired 47722 makes it hang for ~2 minutes and return false.
+LIVE_THERMOSTATS = (config.BEESTAT_LR, config.BEESTAT_UP)
+# beestat's own copy "can get up to a week behind" (API docs), so a week of stored days can still change.
+LOOKBACK_DAYS = 7
 
 
 def parse_summaries(rows: list[dict]) -> list[dict]:
@@ -29,23 +34,51 @@ def parse_summaries(rows: list[dict]) -> list[dict]:
     return out
 
 
-def sync(conn, since: date | None = None) -> int:
-    key = config.load_secrets()["BEESTAT_API_KEY"]
-    resp = http.request("GET", URL, params={"api_key": key, "resource": "runtime_thermostat_summary",
-                                            "method": "read_id"},
-                        headers={"User-Agent": USER_AGENT})
+def _rows(body) -> list[dict]:
+    data = body["data"] if isinstance(body, dict) else body  # files before 2026-11-01 hold only the rows
+    return list(data.values()) if isinstance(data, dict) else list(data)
+
+
+def import_summaries(conn, body) -> int:
+    """Upsert an archived runtime_thermostat_summary response."""
+    return store.upsert(conn, "ecobee_daily", parse_summaries(_rows(body)))
+
+
+def _call(key: str, resource: str, method: str, arguments: dict | None = None) -> dict:
+    params = {"api_key": key, "resource": resource, "method": method}
+    if arguments is not None:
+        params["arguments"] = json.dumps(arguments)
+    resp = http.request("GET", URL, params=params, headers={"User-Agent": USER_AGENT})
     http.raise_for_status(resp)
     body = resp.json()
     if not body.get("success"):
-        raise RuntimeError("beestat request failed")
-    data = body["data"]
-    rows = list(data.values()) if isinstance(data, dict) else list(data)
-    config.BEESTAT_DIR.mkdir(parents=True, exist_ok=True)
-    path = config.BEESTAT_DIR / f"runtime_thermostat_summary_{date.today().isoformat()}.json"
-    path.write_text(json.dumps(rows))
-    parsed = parse_summaries(rows)
+        raise RuntimeError(f"beestat {resource}.{method} failed: {(body.get('data') or {}).get('error_message')}")
+    return body
+
+
+def _read_start(conn, since: date | None) -> date | None:
+    """First date to read: `since`, else a week before the older live thermostat's newest day,
+    else None (read everything)."""
     if since:
-        parsed = [r for r in parsed if r["date"] >= since.isoformat()]
-    n = store.upsert(conn, "ecobee_daily", parsed)
-    store.log_sync(conn, "beestat", since.isoformat() if since else "all", date.today().isoformat(), n, "ok")
-    return n
+        return since
+    latest = [conn.execute("SELECT max(date) FROM ecobee_daily WHERE thermostat_id=?", (str(t),)).fetchone()[0]
+              for t in LIVE_THERMOSTATS]
+    return None if None in latest else date.fromisoformat(min(latest)) - timedelta(days=LOOKBACK_DAYS)
+
+
+def sync(conn, since: date | None = None) -> int:
+    # Files sort oldest first, so the newest archived row for a day wins.
+    total = archive.import_new(conn, "beestat_file", sorted(config.BEESTAT_DIR.glob("*.json")),
+                               lambda p: import_summaries(conn, json.loads(p.read_text())))
+    key = config.load_secrets()["BEESTAT_API_KEY"]
+    for tid in LIVE_THERMOSTATS:
+        _call(key, "runtime", "sync", {"thermostat_id": tid})
+    start = _read_start(conn, since)
+    body = _call(key, "runtime_thermostat_summary", "read_id",
+                 {"attributes": {"date": {"value": start.isoformat(), "operator": ">="}}} if start else None)
+    # Archive the raw response before parsing: the beestat API is provisional and may change.
+    path = archive.write_json(config.BEESTAT_DIR, f"runtime_thermostat_summary_{date.today()}", body)
+    n = import_summaries(conn, body)
+    archive.log_imported(conn, "beestat_file", path, n)
+    store.log_sync(conn, "beestat", start.isoformat() if start else "all", date.today().isoformat(), n, "ok")
+    return total + n

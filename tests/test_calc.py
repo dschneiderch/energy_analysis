@@ -76,18 +76,18 @@ def test_cost_by_category_and_tax():
 
 
 def test_gas_day(db):
-    store.upsert(db, "gas_daily", [{"date": "2022-12-15", "therms": 2.0, "ccf": 2.0}])
+    store.upsert(db, "gas_daily", [{"date": "2022-12-15", "ccf": 2.0}])
     store.upsert(db, "rates", [
         {"fuel": "gas", "schedule": "101", "effective_date": "2022-11-01", "component": "energy",
          "tier_min": 0, "tier_max": None, "rate_per_unit": 1.03788, "unit": "$/therm"},
         {"fuel": "gas", "schedule": "101", "effective_date": "2022-11-01", "component": "basic",
          "tier_min": 0, "tier_max": None, "rate_per_unit": 7.0, "unit": "$/month"}])
     g = gas_day(db, date(2022, 12, 15))
-    assert g["gas_therms"] == 2.0
-    assert g["gas_kwh_equiv"] == pytest.approx(2 * 29.3071)
-    assert g["furnace_heat_kwh"] == pytest.approx(2 * 29.3071 * 0.95)
-    assert g["gas_cost_usd"] == pytest.approx(2 * 1.03788)
-    assert g["gas_gco2e"] == pytest.approx(2 * 5306)
+    assert g["gas_therms"] == pytest.approx(2 * 1.038)
+    assert g["gas_kwh_equiv"] == pytest.approx(2 * 1.038 * 29.3071)
+    assert g["furnace_heat_kwh"] == pytest.approx(2 * 1.038 * 29.3071 * 0.95)
+    assert g["gas_cost_usd"] == pytest.approx(2 * 1.038 * 1.03788)
+    assert g["gas_gco2e"] == pytest.approx(2 * 1.038 * 5306)
     assert gas_day(db, date(2022, 12, 16)) is None
 
 

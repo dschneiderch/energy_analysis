@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .. import config, http, store
+from .. import archive, config, http, store
 
 # Timestamp basis, determined 2026-10-31 by correlating hourly sums of Living Room
 # compHeat1 (+auxHeat1) with hourly Emporia channel 7 + 8 kWh (744 hours each):
@@ -287,73 +287,37 @@ def _fetch(token: str, start: date, end: date) -> dict:
     return payload
 
 
-def _write_archive(payload: dict, start: date, end: date) -> Path:
-    """Write a new archive file under a unique name. Never overwrites: once a window ages out
-    of ecobee's retention, a re-fetch returns filler rows, and the older file is the only copy."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    base = f"runtimeReport_{start.isoformat()}_{end.isoformat()}_fetched{stamp}"
-    data = json.dumps(payload).encode()
-    for i in range(1000):
-        path = config.ECOBEE_API_DIR / (f"{base}.json" if i == 0 else f"{base}_{i}.json")
-        try:
-            with open(path, "xb") as f:  # exclusive create: fails if the file exists
-                f.write(data)
-            return path
-        except FileExistsError:
-            continue
-    raise RuntimeError(f"could not find an unused archive name for {base}")
-
-
-def _file_key(path: Path) -> str:
-    st = path.stat()
-    return f"{st.st_size}:{st.st_mtime_ns}"
-
-
-def _already_imported(conn, path: Path) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM sync_log WHERE source = 'ecobee_file' AND range_start = ? AND range_end = ? "
-        "AND status = 'ok'", (path.name, _file_key(path))).fetchone() is not None
-
-
 def _api_start(conn, since: date | None, today: date) -> date:
     if since:
         return since
-    latest = conn.execute("SELECT max(ts) FROM ecobee_interval WHERE source = 'api'").fetchone()[0]
-    if latest:
-        return date.fromisoformat(latest[:10]) - timedelta(days=2)
-    return today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
+    latest = [conn.execute("SELECT max(ts) FROM ecobee_interval WHERE source = 'api' AND thermostat_id = ?",
+                           (tid,)).fetchone()[0] for tid in (config.LR_ECOBEE_ID, config.UP_ECOBEE_ID)]
+    if None in latest:
+        return today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
+    # Resume from the older thermostat's newest row, so a backlog it uploads after an outage is fetched.
+    return date.fromisoformat(min(latest)[:10]) - timedelta(days=2)
 
 
 def sync(conn, since: date | None = None) -> int:
-    total = 0
-    # 1 + 2: archived files. Each file is imported once (tracked in sync_log by name, size and
-    # mtime); re-importing is harmless but the sensor rows make it slow.
-    for path in sorted(config.ECOBEE_PORTAL_DIR.glob("*.csv")):
-        if _already_imported(conn, path):
-            continue
-        n = import_portal_csv(conn, path)
-        store.log_sync(conn, "ecobee_file", path.name, _file_key(path), n, "ok")
-        total += n
-    for path in sorted(config.ECOBEE_API_DIR.glob("*.json")):
-        if _already_imported(conn, path):
-            continue
-        n, _ = import_payload(conn, json.loads(path.read_text()))
-        store.log_sync(conn, "ecobee_file", path.name, _file_key(path), n, "ok")
-        total += n
+    # 1 + 2: archived files (re-importing is harmless but the sensor rows make it slow).
+    total = archive.import_new(conn, "ecobee_file", sorted(config.ECOBEE_PORTAL_DIR.glob("*.csv")),
+                               lambda p: import_portal_csv(conn, p))
+    total += archive.import_new(conn, "ecobee_file", sorted(config.ECOBEE_API_DIR.glob("*.json")),
+                                lambda p: import_payload(conn, json.loads(p.read_text()))[0])
 
     try:
         # 3: live API. startDate/endDate are UTC days, so end on the UTC date to reach the
-        # current local evening.
+        # current local evening. Once a window ages out of ecobee's retention, a re-fetch returns
+        # filler rows, and the archived file is the only copy.
         today = datetime.now(timezone.utc).date()
         token = access_token()
-        config.ECOBEE_API_DIR.mkdir(parents=True, exist_ok=True)
         cur = _api_start(conn, since, today)
         while cur <= today:
             end = min(cur + timedelta(days=CHUNK_DAYS - 1), today)
             payload = _fetch(token, cur, end)
-            path = _write_archive(payload, cur, end)
+            path = archive.write_json(config.ECOBEE_API_DIR, f"runtimeReport_{cur}_{end}", payload)
             n, _ = import_payload(conn, payload)
-            store.log_sync(conn, "ecobee_file", path.name, _file_key(path), n, "ok")
+            archive.log_imported(conn, "ecobee_file", path, n)
             store.log_sync(conn, "ecobee", cur.isoformat(), end.isoformat(), n, "ok")
             total += n
             cur = end + timedelta(days=1)

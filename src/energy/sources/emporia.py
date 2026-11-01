@@ -1,11 +1,12 @@
 """Emporia Vue hourly kWh per channel via PyEmVue."""
+import json
 import os
 from datetime import date, datetime, time, timedelta, timezone
 
 from pyemvue import PyEmVue
 from pyemvue.enums import Scale, Unit
 
-from .. import config, store
+from .. import archive, config, store
 
 DEFAULT_START = date(2023, 4, 15)
 CHUNK_DAYS = 30
@@ -62,20 +63,43 @@ def _channels(vue: PyEmVue) -> list[tuple[str, str, object]]:
     return out
 
 
-def sync(conn, since: date | None = None) -> int:
-    vue = _login()
-    channels = _channels(vue)
-    end_dt = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+def import_chunks(conn, payload: dict) -> int:
+    """Upsert an archived set of get_chart_usage responses."""
     total = 0
-    for num, name, ch in channels:
-        cur = start_for_channel(conn, num, since)
-        while cur < end_dt:
-            chunk_end = min(cur + timedelta(days=CHUNK_DAYS), end_dt)
-            usage, first = vue.get_chart_usage(ch, cur, chunk_end, scale=Scale.HOUR.value,
-                                               unit=Unit.KWH.value)
-            rows = rows_from_chart(num, name, usage or [], first, chunk_end) if first else []
-            n = store.upsert(conn, "emporia_hourly", rows)
-            store.log_sync(conn, f"emporia:{num}", cur.strftime(_FMT), chunk_end.strftime(_FMT), n, "ok")
-            total += n
-            cur = chunk_end
+    for c in payload["chunks"]:
+        start, end = datetime.fromisoformat(c["start"]), datetime.fromisoformat(c["end"])
+        first = datetime.fromisoformat(c["first"]) if c["first"] else None
+        rows = rows_from_chart(c["channel"], c["channel_name"], c["usage"] or [], first, end) if first else []
+        n = store.upsert(conn, "emporia_hourly", rows)
+        store.log_sync(conn, f"emporia:{c['channel']}", start.strftime(_FMT), end.strftime(_FMT), n, "ok")
+        total += n
     return total
+
+
+def sync(conn, since: date | None = None) -> int:
+    total = archive.import_new(conn, "emporia_file", sorted(config.EMPORIA_DIR.glob("*.json")),
+                               lambda p: import_chunks(conn, json.loads(p.read_text())))
+    vue = _login()
+    end_dt = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    chunks, n = [], 0
+    try:
+        for num, name, ch in _channels(vue):
+            cur = start_for_channel(conn, num, since)
+            while cur < end_dt:
+                chunk_end = min(cur + timedelta(days=CHUNK_DAYS), end_dt)
+                usage, first = vue.get_chart_usage(ch, cur, chunk_end, scale=Scale.HOUR.value,
+                                                   unit=Unit.KWH.value)
+                chunks.append({"channel": num, "channel_name": name, "start": cur.isoformat(),
+                               "end": chunk_end.isoformat(), "first": first.isoformat() if first else None,
+                               "usage": usage})
+                cur = chunk_end
+    finally:
+        # Archive before import, and keep what was fetched even if a later call failed:
+        # finer-grained Emporia data expires upstream.
+        if chunks:
+            payload = {"chunks": chunks}
+            path = archive.write_json(config.EMPORIA_DIR, f"chart_usage_hour_{end_dt.strftime('%Y-%m-%dT%H')}",
+                                      payload)
+            n = import_chunks(conn, payload)
+            archive.log_imported(conn, "emporia_file", path, n)
+    return total + n
