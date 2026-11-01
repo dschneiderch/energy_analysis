@@ -115,7 +115,7 @@ def test_not_home_overlapping_ranges(db):
 
 def test_gas_day_and_electric_unavailable(db):
     _rates(db)
-    store.upsert(db, "gas_daily", [{"date": "2022-12-15", "therms": 2.0, "ccf": 2.0, "in_town": 1}])
+    store.upsert(db, "gas_daily", [{"date": "2022-12-15", "therms": 2.0, "ccf": 2.0}])
     r = compute_day(db, date(2022, 12, 15))
     assert r["gas_therms"] == 2.0
     assert r["furnace_heat_kwh"] == pytest.approx(2 * 29.3071 * 0.95)

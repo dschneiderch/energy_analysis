@@ -18,7 +18,7 @@ def electric_cost(rates: RateSet, prior_house_kwh: float, rest_of_house_kwh: flo
     for lo, hi, rate in rates.tiers:
         hi = float("inf") if hi is None else hi
         portion = max(0.0, min(top, hi) - max(base, lo))
-        energy_cost += portion * (rate or 0.0)
+        energy_cost += portion * rate
     cost = energy_cost + total * rates.tax_adj
     by_cat = {k: (cost * v / total if total else 0.0) for k, v in kwh_by_category.items()}
     notes = [f"rate effective {rates.effective_date.isoformat()} used as fallback"] if rates.is_fallback else []

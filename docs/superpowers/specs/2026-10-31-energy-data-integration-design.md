@@ -46,7 +46,7 @@ These come from the user and from the data exploration on 2026-10-31.
 | Grid carbon (Electricity Maps zone `US-NW-AVA`) | Home Assistant WebSocket `recorder/statistics_during_period`, hourly `mean` of `sensor.electricity_maps_co2_intensity` and `sensor.electricity_maps_grid_fossil_fuel_percentage`, using `HA_TOKEN` | 2024-02 → now, ~complete | HA raw history only goes back ~10 days; use long-term statistics only |
 | Weather | Open-Meteo archive API (`archive-api.open-meteo.com/v1/archive`), hourly `temperature_2m` (°F) and `wind_speed_10m` (mph), timezone UTC | any date | modeled reanalysis at the configured coordinates; archive lags a few days, so fall back to the forecast API (`past_days`) for recent dates and tag those rows |
 | Avista rates | `rates.csv` (in git), hand-transcribed from Avista's Idaho rate-history PDFs: electric Schedule 1 (`ideratehist9126.pdf`) and gas Schedule 101 (`IDGRatehist9126.pdf`) | all rate changes covering 2021 → now | OpenEI is not used (no Idaho Avista data after 2018, no gas) |
-| Gas use | `data_archive/avista_gas/`: `gas_furnace_therms_history.csv` (therms per day), plus raw `avista-gas-daily-*.csv` (CCF meter reads ~16:00) | Dec 2021 – May 2023 with gaps | |
+| Gas use | `data_archive/avista_gas/avista-gas-daily-*.csv` (CCF meter reads ~16:00; therms = CCF × `config.THERMS_PER_CCF`; new dates are added, stored dates are never rewritten) | Dec 2021 – May 2023 | |
 | Not-home days | `exclude_dates.txt` in the project root (committed; the user keeps adding to it), plus ecobee vacation events | 2021-12 → present (file), plus events | vacation events are long numeric ids, hex ids, or "Vacation"; their heat setpoint is 55°F |
 
 Secrets live in `.env` (`HA_TOKEN`, `ECOBEE_USERNAME`, `ECOBEE_PASSWORD`, `BEESTAT_API_KEY`) and `keys.json` (Emporia). Saved tokens go in `.secrets/`. All of these are gitignored.
@@ -93,7 +93,7 @@ All timestamps are stored in UTC. A "day" is local midnight to midnight in `Amer
 | `emporia_hourly` | channel, ts | kwh, channel_name |
 | `grid_carbon_hourly` | ts | co2_g_per_kwh, fossil_pct |
 | `weather_hourly` | ts | temp_f, wind_mph, source (`archive` / `forecast`) |
-| `gas_daily` | date | therms, ccf, in_town |
+| `gas_daily` | date | therms, ccf |
 | `rates` | fuel, schedule, effective_date, component, tier_min | rate_per_unit, unit (loaded from `rates.csv`) |
 | `not_home` | start_date, end_date | source (`exclude_dates` / `ecobee_vacation`) |
 | `sync_log` | source, range_start, range_end | fetched_at, rows, status |

@@ -27,17 +27,24 @@ def test_exclude_dates_resync_adds_and_removes(db, tmp_path, monkeypatch):
     assert [tuple(r) for r in rows] == [("2026-11-20", "2026-11-27")]
 
 
-def test_gas_files_read_from_configured_dir(db, tmp_path, monkeypatch):
-    (tmp_path / "gas_furnace_therms_history.csv").write_text(
-        "Date,Therms,HDD – 65F,In Town\n2022-12-15,3.5,40,1\n")
+def test_gas_therms_from_ccf(db, tmp_path, monkeypatch):
     (tmp_path / "avista-gas-daily-x.csv").write_text(
         'Name, X\nFuel Type,Gas\n,\nMeter Badge Number: 1,\nDate/Time,CCFC  \n'
-        '2022-12-15 15:59:22,2\n2022-12-16 15:59:22,4\n')
+        '2023-02-28 15:59:22,2\n2023-03-01 15:59:22,4\n,\n')
     monkeypatch.setattr(config, "GAS_DIR", tmp_path)
     local_files.sync(db)
-    assert db.execute("select therms from gas_daily where date='2022-12-15'").fetchone()[0] == 3.5
-    rows = db.execute("select date, therms, ccf, in_town from gas_daily order by date").fetchall()
-    assert [tuple(r) for r in rows] == [("2022-12-15", 3.5, 2.0, 1), ("2022-12-16", None, 4.0, None)]
+    rows = db.execute("select date, therms, ccf from gas_daily order by date").fetchall()
+    assert [tuple(r) for r in rows] == [("2023-02-28", pytest.approx(2 * 1.038), 2.0),
+                                        ("2023-03-01", pytest.approx(4 * 1.038), 4.0)]
+
+
+def test_overlapping_gas_files_count_each_read_once(db, tmp_path, monkeypatch):
+    body = 'Name, X\nDate/Time,CCFC  \n2022-12-15 15:59:22,2\n'
+    (tmp_path / "avista-gas-daily-a.csv").write_text(body)
+    (tmp_path / "avista-gas-daily-b.csv").write_text(body + "2022-12-15 20:00:00,1\n")
+    monkeypatch.setattr(config, "GAS_DIR", tmp_path)
+    local_files._load_gas(db)
+    assert db.execute("select ccf from gas_daily where date='2022-12-15'").fetchone()[0] == 3.0
 
 
 def _rates_file(tmp_path, monkeypatch, body):
@@ -62,12 +69,23 @@ def test_rates_date_without_energy_component_raises(db, tmp_path, monkeypatch):
         local_files._load_rates(db)
 
 
-def test_gas_blank_date_skipped_and_cleaned(db, tmp_path, monkeypatch):
-    (tmp_path / "gas_furnace_therms_history.csv").write_text("Date,Therms,In Town\n2025-01-01,3.5,1\n,,\n")
+def test_rates_blank_energy_rate_raises(db, tmp_path, monkeypatch):
+    _rates_file(tmp_path, monkeypatch, "electric,1,2021-09-01,energy,0,600,0.08,$/kWh\n"
+                                       "electric,1,2021-09-01,energy,600,,,$/kWh\n")
+    with pytest.raises(ValueError, match="2021-09-01"):
+        local_files._load_rates(db)
+
+
+def test_gas_resync_only_adds_new_dates(db, tmp_path, monkeypatch):
+    f = tmp_path / "avista-gas-daily-x.csv"
+    f.write_text("Date/Time,CCFC\n2023-01-05 16:00:00,1\n")
     monkeypatch.setattr(config, "GAS_DIR", tmp_path)
-    db.execute("insert into gas_daily (date) values ('')")
-    local_files._load_gas(db)
-    assert [r[0] for r in db.execute("select date from gas_daily")] == ["2025-01-01"]
+    db.execute("insert into gas_daily (date, therms, ccf) values ('2023-01-04', 9, 9)")
+    assert local_files._load_gas(db) == 1
+    f.write_text("Date/Time,CCFC\n2023-01-04 16:00:00,1\n2023-01-05 16:00:00,5\n2023-01-06 16:00:00,2\n")
+    assert local_files._load_gas(db) == 1
+    rows = db.execute("select date, ccf from gas_daily order by date").fetchall()
+    assert [tuple(r) for r in rows] == [("2023-01-04", 9.0), ("2023-01-05", 1.0), ("2023-01-06", 2.0)]
 
 
 def test_parse_exclude_dates_errors_name_line():

@@ -43,6 +43,8 @@ BEESTAT_OLD = 47722
 LR_BEESTAT_START = date(2023, 10, 30)
 
 KWH_PER_THERM = 29.3071
+# shortcut: one heat-content factor for all dates; Avista's billed factor varies by month (~1.036-1.039)
+THERMS_PER_CCF = 1.038
 G_CO2E_PER_THERM = 5306
 
 COMPLETE_FRACTION = 0.95

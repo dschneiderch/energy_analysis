@@ -54,6 +54,10 @@ def _load_rates(conn) -> int:
         for d, comps in sorted(dates.items()):
             if "energy" not in comps:
                 raise ValueError(f"rates.csv: effective_date {d} ({fuel} schedule {sched}) has no 'energy' component")
+    for r in rows:
+        if r["component"] == "energy" and r["rate_per_unit"] is None:
+            raise ValueError(f"rates.csv: effective_date {r['effective_date']} ({r['fuel']} schedule "
+                             f"{r['schedule']}) has an energy tier with no rate")
     cols = list(rows[0]) if rows else []
     with conn:  # single transaction: replace the table with the file's contents
         conn.execute("DELETE FROM rates")
@@ -78,20 +82,7 @@ def _load_gas(conn) -> int:
     gas_dir = config.GAS_DIR
     if not gas_dir.exists():
         return 0
-    days: dict[str, dict] = {}
-
-    hist = gas_dir / "gas_furnace_therms_history.csv"
-    if hist.exists():
-        with open(hist, newline="", encoding="utf-8-sig") as fh:
-            for r in csv.DictReader(fh):
-                key = (r.get("Date") or "").strip()
-                if not key:
-                    continue
-                it = _num(r.get("In Town"))
-                days.setdefault(key, {})
-                days[key]["therms"] = _num(r.get("Therms"))
-                days[key]["in_town"] = None if it is None else int(it)
-
+    reads: dict[datetime, float] = {}  # keyed by read time, so overlapping downloads count once
     for f in sorted(gas_dir.glob("avista-gas-daily-*.csv")):
         with open(f, newline="", encoding="utf-8-sig") as fh:
             started = False
@@ -101,18 +92,16 @@ def _load_gas(conn) -> int:
                     continue
                 if len(row) < 2 or not row[0].strip():
                     continue
-                key = datetime.strptime(row[0].strip(), "%Y-%m-%d %H:%M:%S").date().isoformat()
                 v = _num(row[1])
-                if v is None:
-                    continue
-                d = days.setdefault(key, {})
-                d["ccf"] = d.get("ccf", 0.0) + v
-
-    rows = [{"date": k, "therms": v.get("therms"), "ccf": v.get("ccf"), "in_town": v.get("in_town")}
-            for k, v in sorted(days.items())]
-    with conn:
-        conn.execute("DELETE FROM gas_daily WHERE date = ''")  # cleanup of rows from blank CSV lines
-    return store.upsert(conn, "gas_daily", rows)
+                if v is not None:
+                    reads[datetime.strptime(row[0].strip(), "%Y-%m-%d %H:%M:%S")] = v
+    ccf: dict[date, float] = {}
+    for ts, v in reads.items():
+        ccf[ts.date()] = ccf.get(ts.date(), 0.0) + v
+    with conn:  # gas history is final: only add dates not stored yet
+        cur = conn.executemany("INSERT OR IGNORE INTO gas_daily (date, therms, ccf) VALUES (?, ?, ?)",
+                               [(d.isoformat(), v * config.THERMS_PER_CCF, v) for d, v in sorted(ccf.items())])
+    return cur.rowcount
 
 
 def sync(conn, since=None) -> int:
