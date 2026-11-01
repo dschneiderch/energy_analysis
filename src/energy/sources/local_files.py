@@ -106,4 +106,7 @@ def _load_gas(conn) -> int:
 
 def sync(conn, since=None) -> int:
     """Reload all local reference files (always in full; `since` is accepted and ignored)."""
-    return _load_rates(conn) + _load_not_home(conn) + _load_gas(conn)
+    rates, not_home, gas = _load_rates(conn), _load_not_home(conn), _load_gas(conn)
+    print(f"  {config.RATES_CSV.name}: {rates} rates; {config.EXCLUDE_DATES_FILE.name}: {not_home} ranges; "
+          f"gas: {gas} new days", flush=True)
+    return rates + not_home + gas
