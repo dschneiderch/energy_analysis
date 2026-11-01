@@ -39,7 +39,7 @@ Sources include `local`, `emporia`, `weather`, `ecobee`, `beestat`, `ha_carbon`;
 - `data/energy.sqlite`: the database (rebuildable from the archive plus the APIs).
 - `data_archive/<source>/`: raw downloads, never overwritten (spec section 10a in `docs/superpowers/specs/2026-10-31-energy-data-integration-design.md`).
 - `exclude_dates.txt`: hand-maintained not-home date ranges (`YYYY-M-D` or `start -- end`); re-read on every sync. A bad line fails the sync with its line number.
-- `rates.csv`: hand-transcribed from Avista's Idaho rate-history PDFs. Update it when rates change; it replaces the `rates` table on every `local` sync, and every effective date needs an `energy` row.
+- `rates.csv`: hand-transcribed from Avista's Idaho rate-history PDFs. Update it when rates change; it replaces the `rates` table on every `local` sync, and every effective date needs an `energy` row. download from https://www.myavista.com/about-us/our-rates-and-tariffs/idaho-rates (updated 10-1-2026 https://www.myavista.com/-/media/myavista/content-documents/our-rates-and-tariffs/id/ideratehist10126.pdf)
 
 ## Settings (`src/energy/config.py`)
 

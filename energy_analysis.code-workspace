@@ -7,5 +7,15 @@
 			"path": "../insulation_impact_analysis"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"sqltools.useNodeRuntime": true,
+		"sqltools.connections": [
+			{
+				"previewLimit": 50,
+				"driver": "SQLite",
+				"name": "energy",
+				"database": "./data/energy.sqlite"
+			}
+		]
+	}
 }

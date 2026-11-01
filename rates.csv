@@ -54,6 +54,11 @@ electric,1,2026-09-01,energy,600,,0.11886,$/kWh
 electric,1,2026-09-01,basic,0,,20.00,$/month
 electric,1,2026-09-01,seasonal,0,,20.00,$/month
 electric,1,2026-09-01,tax_adj,0,,0.000923,$/kWh
+electric,1,2026-10-01,energy,0,600,0.11424,$/kWh
+electric,1,2026-10-01,energy,600,,0.12712,$/kWh
+electric,1,2026-10-01,basic,0,,20.00,$/month
+electric,1,2026-10-01,seasonal,0,,20.00,$/month
+electric,1,2026-10-01,tax_adj,0,,0.000923,$/kWh
 gas,101,2021-09-01,energy,0,,0.72615,$/therm
 gas,101,2021-09-01,basic,0,,6.00,$/month
 gas,101,2021-11-01,energy,0,,0.72905,$/therm
