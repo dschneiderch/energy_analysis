@@ -42,17 +42,26 @@ def test_sync_refreshes_reads_recent_week_archives_raw_and_rebuilds(db, tmp_path
         def json(self):
             return self.b
 
+    profiles = {"success": True, "data": {"9": {"profile_id": 9, "thermostat_id": 47724, "date": "2026-10-31",
+                                                "profile": {"balance_point": {"resist": 67.3}}, "deleted": False}}}
+
     def request(method, url, params, headers):
         calls.append((params["resource"], params["method"], json.loads(params.get("arguments", "null"))))
-        return Resp({"success": True, "data": None} if params["resource"] == "runtime" else body)
+        return Resp({"runtime": {"success": True, "data": None}, "profile": profiles}.get(params["resource"], body))
     monkeypatch.setattr(beestat.http, "request", request)
     beestat.sync(db)
     # Only live thermostats are refreshed; the read starts a week before the older one's newest day.
     assert calls == [("runtime", "sync", {"thermostat_id": 47724}), ("runtime", "sync", {"thermostat_id": 47723}),
                      ("runtime_thermostat_summary", "read_id",
-                      {"attributes": {"date": {"value": "2026-10-13", "operator": ">="}}})]
-    [new_file] = tmp_path.glob("*_fetched*.json")
+                      {"attributes": {"date": {"value": "2026-10-13", "operator": ">="}}}),
+                     ("profile", "read_id", None)]
+    [new_file] = tmp_path.glob("runtime_thermostat_summary_*_fetched*.json")
     assert json.loads(new_file.read_text()) == body
+    [profile_file] = tmp_path.glob("profile_*.json")
+    assert json.loads(profile_file.read_text()) == profiles
+    calls.clear()
+    beestat.sync(db)  # profiles are re-read from the newest stored date
+    assert calls[-1] == ("profile", "read_id", {"attributes": {"date": {"value": "2026-10-31", "operator": ">="}}})
 
     fresh = store.connect(":memory:")
     monkeypatch.setattr(beestat.http, "request", lambda *a, **k: (_ for _ in ()).throw(ConnectionError("offline")))
@@ -61,6 +70,8 @@ def test_sync_refreshes_reads_recent_week_archives_raw_and_rebuilds(db, tmp_path
     q = "select thermostat_id, date, fan_s from ecobee_daily order by date"
     assert [tuple(r) for r in fresh.execute(q)] == [tuple(r) for r in db.execute(q)] == \
         [("47724", "2026-10-20", 9999), ("47723", "2026-10-25", 7770)]
+    assert [tuple(r) for r in fresh.execute("select profile_id, thermostat_id, date, profile from beestat_profile")] == \
+        [(9, "47724", "2026-10-31", '{"balance_point": {"resist": 67.3}}')]
 
 
 def test_read_start_reads_everything_until_both_thermostats_have_data(db):

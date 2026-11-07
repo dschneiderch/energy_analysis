@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS ecobee_daily (
     interval_count INTEGER, source TEXT,
     PRIMARY KEY (thermostat_id, date)
 );
+CREATE TABLE IF NOT EXISTS beestat_profile (
+    profile_id INTEGER NOT NULL PRIMARY KEY, thermostat_id TEXT NOT NULL, date TEXT NOT NULL, profile TEXT
+);
 CREATE TABLE IF NOT EXISTS emporia_hourly (
     channel TEXT NOT NULL, ts TEXT NOT NULL, kwh REAL, channel_name TEXT,
     PRIMARY KEY (channel, ts)

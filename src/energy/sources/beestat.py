@@ -44,6 +44,13 @@ def import_summaries(conn, body) -> int:
     return store.upsert(conn, "ecobee_daily", parse_summaries(_rows(body)))
 
 
+def import_profiles(conn, body) -> int:
+    """Upsert an archived profile response (beestat's weekly temperature profiles)."""
+    return store.upsert(conn, "beestat_profile", [
+        {"profile_id": r["profile_id"], "thermostat_id": r["thermostat_id"], "date": r["date"],
+         "profile": json.dumps(r["profile"])} for r in _rows(body) if not r.get("deleted")])
+
+
 def _call(key: str, resource: str, method: str, arguments: dict | None = None) -> dict:
     params = {"api_key": key, "resource": resource, "method": method}
     if arguments is not None:
@@ -67,9 +74,11 @@ def _read_start(conn, since: date | None) -> date | None:
 
 
 def sync(conn, since: date | None = None) -> int:
-    # Files sort oldest first, so the newest archived row for a day wins.
-    total = archive.import_new(conn, "beestat_file", sorted(config.BEESTAT_DIR.glob("*.json")),
+    # Files sort oldest first, so the newest archived row wins.
+    total = archive.import_new(conn, "beestat_file", sorted(config.BEESTAT_DIR.glob("runtime_thermostat_summary_*.json")),
                                lambda p: import_summaries(conn, json.loads(p.read_text())))
+    total += archive.import_new(conn, "beestat_profile_file", sorted(config.BEESTAT_DIR.glob("profile_*.json")),
+                                lambda p: import_profiles(conn, json.loads(p.read_text())))
     key = config.load_secrets()["BEESTAT_API_KEY"]
     for tid in LIVE_THERMOSTATS:
         _call(key, "runtime", "sync", {"thermostat_id": tid})
@@ -81,4 +90,13 @@ def sync(conn, since: date | None = None) -> int:
     n = import_summaries(conn, body)
     archive.log_imported(conn, "beestat_file", path, n)
     store.log_sync(conn, "beestat", start.isoformat() if start else "all", date.today().isoformat(), n, "ok")
-    return total + n
+
+    # profile.read_id is public but missing from the API docs. beestat regenerates the current week's
+    # profile in place (same profile_id, later date), so re-read from the newest stored date.
+    latest = conn.execute("SELECT max(date) FROM beestat_profile").fetchone()[0]
+    body = _call(key, "profile", "read_id",
+                 {"attributes": {"date": {"value": latest, "operator": ">="}}} if latest else None)
+    path = archive.write_json(config.BEESTAT_DIR, f"profile_{date.today()}", body)
+    n_profiles = import_profiles(conn, body)
+    archive.log_imported(conn, "beestat_profile_file", path, n_profiles)
+    return total + n + n_profiles
