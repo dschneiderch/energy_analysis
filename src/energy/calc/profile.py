@@ -47,7 +47,8 @@ def load_rows(conn, begin: int, end: int, heat_type: str) -> dict[int, dict[str,
     return out
 
 
-def samples(rows: dict[int, dict[str, dict]], tid: str, begin: int, end: int) -> dict[str, dict[int, list[float]]]:
+def samples(rows: dict[int, dict[str, dict]], tid: str, begin: int, end: int,
+            min_duration: dict[str, int] = MIN_DURATION) -> dict[str, dict[int, list[float]]]:
     """°F/hour indoor change per sample, by type and whole-degree outdoor temperature at the sample start."""
     first = {g: min((t for t, r in rows.items() if g in r), default=None) for g in GROUP}
     out: dict[str, dict[int, list[float]]] = {k: defaultdict(list) for k in TYPES}
@@ -103,7 +104,7 @@ def samples(rows: dict[int, dict[str, dict]], tid: str, begin: int, end: int) ->
                 end_row = rows.get(t - offset, {}).get(tid)
                 if end_row and t - offset > b["ts"]:
                     duration = end_row["ts"] - b["ts"]
-                    if duration >= MIN_DURATION[k]:
+                    if duration >= min_duration[k]:
                         out[k][b["outdoor"]].append((end_row["indoor"] - b["indoor"]) / duration * 3600)
                 starts[k] = cur
                 break
@@ -164,10 +165,15 @@ def _instant(d: date | datetime, next_day: bool = False) -> datetime:
     return datetime.combine(d + timedelta(days=next_day), time.min, ZoneInfo(config.LOCAL_TZ))
 
 
+def window(start: date | datetime, end: date | datetime) -> tuple[int, int]:
+    """Epoch seconds of the first and last 5-minute step. Dates are whole local days, both included."""
+    return int(_instant(start).timestamp()) // STEP * STEP, int(_instant(end, next_day=True).timestamp()) // STEP * STEP
+
+
 def generate(conn, tid: str, start: date | datetime, end: date | datetime) -> dict:
     """beestat-style profile from `start` to `end`. Dates are whole local days, both included.
     beestat's own window is the year before its generation time: start = generated_at − 1 year."""
-    begin, stop = (int(d.timestamp()) // STEP * STEP for d in (_instant(start), _instant(end, next_day=True)))
+    begin, stop = window(start, end)
     binned = samples(load_rows(conn, begin, stop, HEAT_TYPE[tid]), tid, begin, stop)
     out = profile(binned, HEAT_TYPE[tid])
     out["samples"] = {k: sum(len(v) for v in binned[k].values()) for k in TYPES}

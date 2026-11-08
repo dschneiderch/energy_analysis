@@ -93,7 +93,7 @@ def test_to_utc_local_basis():
 
 
 def test_api_rows_do_not_clobber_portal_rows(db):            # Review Focus 3
-    store.upsert(db, "ecobee_interval", parse_portal_csv(FIXTURES / "portal_sample.csv"))
+    store.upsert(db, "ecobee_interval", parse_portal_csv(FIXTURES / "portal_sample.csv")[0])
     before = db.execute("select count(*) from ecobee_interval where source='portal_csv'").fetchone()[0]
     store.upsert(db, "ecobee_interval", parse_runtime_report(PRE_RETENTION_PAYLOAD_FOR_SAME_TIMES)[0])
     assert db.execute("select count(*) from ecobee_interval where source='portal_csv'").fetchone()[0] == before
@@ -107,6 +107,8 @@ def test_portal_import_does_not_replace_api_rows(db):
     got = dict(tuple(r) for r in db.execute("select ts, source from ecobee_interval"))
     assert got["2025-01-01T08:25:00Z"] == "api"
     assert sorted(got.values()) == ["api", "portal_csv", "portal_csv"]
+    sensor_ts = {r[0] for r in db.execute("select ts from ecobee_sensor where sensor_name = 'Bedroom'")}
+    assert "2025-01-01T08:25:00Z" not in sensor_ts and len(sensor_ts) == 2  # API time keeps no portal sensors
 
 
 @pytest.mark.skipif(ecobee.ECOBEE_TS_IS_UTC, reason="UTC timestamps have no repeated hour")
@@ -117,7 +119,7 @@ def test_fall_back_hour_keeps_both_copies():                  # Review Focus 2
 
 
 def test_portal_csv_upstairs_heat_goes_to_aux():
-    rows = parse_portal_csv(FIXTURES / "portal_sample.csv")   # Upstairs sample, a row with Heat Stage 1 = 195
+    rows, sensors = parse_portal_csv(FIXTURES / "portal_sample.csv")   # Upstairs sample, a row with Heat Stage 1 = 195
     assert any(r["aux_heat_s"] == 195 and r["comp_heat_s"] == 0 for r in rows)
     r = rows[1]
     assert r["thermostat_id"] == UP and r["ts"] == "2025-01-01T11:55:00Z"
@@ -125,6 +127,11 @@ def test_portal_csv_upstairs_heat_goes_to_aux():
     assert (r["heat_setpoint_f"], r["cool_setpoint_f"]) == (65, 72)
     assert (r["hvac_mode"], r["zone_hvac_mode"], r["climate"]) == ("heat", "heatStage1On", "Sleep")
     assert r["calendar_event"] is None and r["source"] == "portal_csv"
+    got = {(x["sensor_name"], x["kind"]): x["value"] for x in sensors if x["ts"] == r["ts"]}
+    assert got == {("Thermostat Temperature", "temperature"): 64.3, ("Thermostat Humidity", "humidity"): 38,
+                   ("Kids' Room", "temperature"): 65.1, ("Kids' Room", "occupancy"): 0,
+                   ("Office Guest Room", "temperature"): 61.7, ("Office Guest Room", "occupancy"): 0,
+                   ("Bedroom", "temperature"): 64.7, ("Bedroom", "occupancy"): 1}
 
 
 def test_portal_csv_living_room_mapping(tmp_path):
@@ -137,7 +144,7 @@ def test_portal_csv_living_room_mapping(tmp_path):
         "Cool Stage 1 (sec),Heat Stage 1 (sec),Aux Heat 1 (sec),Fan (sec),DM Offset\n"
         "2026-01-01,00:00:00,heat,compressorHeatStage1On,,Sleep,74,66,64.9,31,30.5,0,0,300,15,300,,\n"
         "2026-01-01,00:05:00,,,,,,,,,30.5,0,,,,,,\n")
-    [r] = parse_portal_csv(p)
+    [r], _ = parse_portal_csv(p)
     assert r["thermostat_id"] == LR and r["comp_heat_s"] == 300 and r["aux_heat_s"] == 15
 
 

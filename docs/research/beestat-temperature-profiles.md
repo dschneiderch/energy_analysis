@@ -60,8 +60,28 @@ beestat's reported types here: Living Room `compressor`, Upstairs `electric`.
 
 Quirk: the *profiled* thermostat's type is applied to every row in the group. For the Upstairs
 profile, Living Room compressor heating therefore becomes `heat_1` = Living Room aux (0), so it
-does not count as "on". Upstairs resist and heat samples can include periods when the Living Room
-was heating. Our implementation copies this to stay comparable.
+does not count as "on". `profile.py` copies this to stay comparable; `house_profile.py` maps each
+thermostat by its own type. Measured effect on Upstairs (bins ≤ 55 °F, 2026-11-07):
+
+| Upstairs | beestat quirk | each thermostat by its own type | bias |
+| --- | --- | --- | --- |
+| resist, Apr 16 – Nov 23 2025 | −0.56 °F/h, 3,079 samples | −0.53, 2,758 | −0.03 |
+| resist, Dec 2 2025 – Nov 7 2026 | −0.72 °F/h, 4,663 samples | −0.58, 3,496 | −0.14 |
+| heat_1, Dec 2 2025 – Nov 7 2026 | +2.61 °F/h, 220 samples | +2.47, 275 | +0.14 |
+
+- The quirk adds 10–25 % extra resist samples: periods when the heat pump heats the Living Room.
+  With them, Upstairs appears to lose heat *faster*. That is probably because those are the colder
+  stretches (not checked).
+- The bias grows with how much the Living Room heats, so it differs between periods (−0.03 in a
+  mostly warm window, −0.14 in one with winter). That's larger than the pre/post changes being
+  measured. **beestat's archived Upstairs resist can't be used for a pre/post comparison**, and it
+  can't be corrected, because the 5-minute data is gone.
+- Upstairs heat_1 is usable with a bias of about 0.1 °F/h. It includes times when both zones call at
+  once.
+- The Living Room profile is not affected: under the compressor mapping, Upstairs aux counts as "on".
+- A second problem for Upstairs: `zoneAveTemp` follows the room of the current comfort setting
+  (Sleep and Weekend Home → Kids' Room, Home → Office). The thermostat's own sensor tracks the Living
+  Room zone because of where it sits. See `house-profile-options.md` for the room-average profile.
 
 ## Algorithm (`profile::generate`)
 
@@ -151,17 +171,58 @@ Validated 2026-11-07 against every stored beestat profile whose 365-day window l
   lies near the observed bin range. A nearly flat line puts it far outside (Living Room
   2026-10-31: −343 °F).
 
-First look (2026-11-07), same April 16 – October 31 span before and after the work:
+**Compare bins in the cold range, not whole-line slopes.** The fitted lines span roughly 20–95 °F,
+so summer bins (with solar gain) drive the resist slope. The heating slope swings with whichever
+cold snaps happen to be in the window: the Living Room heat_1 slope jumped from 0.003 to 0.034 when
+the 2025-02 cold snap (−3 °F) entered the trailing window, and fell again when it left in 2026-02.
+A first look that compared whole-line slopes over April–October 2025 vs 2026 showed −16 % (Living
+Room) and −23 % (Upstairs) resist slopes. That turned out to be a fitting artifact (see below).
 
-| | resist slope | resist at 40 °F |
-| --- | --- | --- |
-| Living Room 2025 → 2026 | 0.0321 → 0.0270 (−16 %) | −0.85 → −0.70 °F/h |
-| Upstairs 2025 → 2026 | 0.0404 → 0.0311 (−23 %) | −0.82 → −0.64 °F/h |
+Insulation check (2026-11-07). Each value is the change in mean °F/h over the bins both profiles
+share, all at or below 55 °F. It is compared with the difference between two pre-insulation
+profiles:
 
-These spans are mostly warm months, so the bins run up to 94 °F, and solar gain, weather and setpoints
-differ between years. The heating lines have only 5–24 bins in these spans, and their slopes even
-change sign, so they can't be compared yet. A heating comparison needs winter data, and our
-5-minute data with both thermostats has no pre-insulation winter.
+| | Pre year → post year | Variation: 2024-11-19 → 2025-11-18 | Variation: 2025-03-01 → 2025-11-18 |
+| --- | --- | --- | --- |
+| Living Room resist | −0.90 → −0.88 (+0.02; 24–55 °F) | +0.10 | +0.09 |
+| Upstairs resist | −0.84 → −0.74 (+0.10; 21–55 °F) | −0.15 | −0.07 |
+| Living Room heat_1 | +3.12 → +3.30 (+0.17; 19–55 °F) | +0.41 | +0.16 |
+| Upstairs heat_1 | +2.49 → +2.46 (−0.03; 20–47 °F) | −0.55 | −0.17 |
+
+- **Pre year:** beestat's profile of 2025-11-18 (the year to 2025-11-18).
+- **Post year:** ours, 2025-12-02 to 2026-11-07.
+- **Variation 2024-11-19:** independent of the baseline. For the Living Room its window starts
+  after the 2024-03 reset (about 2024-03-05 → 2024-11-19, no aux period). For Upstairs it covers
+  2023-11 → 2024-11, including the Living Room aux winter.
+- **Variation 2025-03-01:** clean, but its window (2024-03 → 2025-03) shares the whole 2024–25
+  winter with the baseline, so it understates the true variation.
+
+Bin ranges are where both periods have bins. There is no lower cutoff: the data
+stops near 21 °F because resist needs both zones off for 30 minutes, which is rare in the cold, and
+winter 2025–26 had no cold snap (Upstairs' 12–15 °F pre bins have no post counterpart). The 55 °F
+upper cutoff is deliberate: above it, sun heating dominates. **Every pre→post change is within
+the variation between pre-insulation profiles, even against the overlapping 2025-03-01 profile**,
+so thermostat profiles alone don't show a significant insulation effect yet. Upstairs resist (+0.10 =
+slower loss) points the right way but isn't conclusive. See `house-profile-options.md` for methods
+with more statistical power.
+
+## History of the archived profiles (what is usable)
+
+From the 288 archived profiles and beestat's daily runtime:
+
+- **Living Room aux period: November 2023 – March 2024.** The heat pump logged 18–234 aux
+  hours a month, near zero after that (heat strips have essentially never run). Profiles from that
+  winter (2023-12 to 2024-02) have an `auxiliary_heat_1` curve and a split heat_1. Don't use them.
+- **History resets.** beestat's 5-minute history restarted around 2024-03-05 (Living Room: profile
+  duration drops to 0) and 2024-03-21 (Upstairs: 21 days), right when the aux period ended,
+  probably because of the reprogramming. Profiles until about 2025-03 cover less than a year
+  (`metadata.duration` < 365).
+- **Clean full-year pre-insulation profiles: generated 2025-03-01 to 2025-11-18.** These are full
+  365-day windows, all after the 2024-03 reset, so none include the aux period, and they include the
+  2025-02 cold snap. **The profile of 2025-11-18 is the best pre-insulation baseline** (part 1 of the
+  work, crawlspace foam, was 2025-11-24; part 2, the attic, was 2025-12-01).
+- The first beestat profile entirely after the work will be generated around 2026-12-02. Until then,
+  use our own `generate()` for a post window.
 
 ## What this means for us
 

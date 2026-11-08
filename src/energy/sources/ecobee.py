@@ -141,18 +141,39 @@ def parse_runtime_report(payload: dict) -> tuple[list[dict], list[dict]]:
     return intervals, sensors
 
 
-def parse_portal_csv(path: Path) -> list[dict]:
+def _portal_sensor_columns(fields: list[str]) -> list[tuple[str, str, str]]:
+    """(column, sensor name, kind) for the remote-sensor columns after "DM Offset": "<name> (F)",
+    "<name> (%RH)" and "<name>2" (occupancy). Names match the API's sensorName once stripped."""
+    after = fields[fields.index("DM Offset") + 1:] if "DM Offset" in fields else []
+    temps = {c[:-4] for c in after if c.endswith(" (F)")}
+    out = []
+    for c in after:
+        if c.endswith(" (F)"):
+            out.append((c, c[:-4].strip(), "temperature"))
+        elif c.endswith(" (%RH)"):
+            out.append((c, c[:-6].strip(), "humidity"))
+        elif c[:-1] in temps:
+            out.append((c, c[:-1].strip(), "occupancy"))
+    return out
+
+
+def parse_portal_csv(path: Path) -> tuple[list[dict], list[dict]]:
     with open(path, newline="", encoding="utf-8-sig") as f:
         head = [next(f) for _ in range(5)]
         tid = next(line.strip().split(",")[3] for line in head if line.startswith("#,Thermostat,identifier,"))
         reader = csv.DictReader(f)
+        sensor_cols = _portal_sensor_columns(reader.fieldnames or [])
         upstairs = tid == config.UP_ECOBEE_ID
         folder = _Folder()
-        out = []
+        out, sensors = [], []
         for r in reader:
             r.pop(None, None)  # trailing empty field
             d, t = r["Date"], r["Time"]
             ts = folder.ts(d, t)
+            for col, name, kind in sensor_cols:
+                value = _num(r.get(col))
+                if value is not None:
+                    sensors.append({"thermostat_id": tid, "ts": ts, "sensor_name": name, "kind": kind, "value": value})
             if not (r.get("System Mode") or "").strip():
                 continue
             heat1 = _num(r.get("Heat Stage 1 (sec)"))
@@ -174,17 +195,20 @@ def parse_portal_csv(path: Path) -> list[dict]:
                 "climate": _text(r.get("Program Mode")),
                 "source": "portal_csv",
             })
-    return out
+    return out, sensors
 
 
 def import_portal_csv(conn, path: Path) -> int:
-    """Upsert a portal CSV, skipping intervals that already have an API row (the API row wins)."""
-    rows = parse_portal_csv(path)
-    if not rows:
+    """Upsert a portal CSV and its sensor readings, skipping intervals that already have an API row
+    (the API row wins)."""
+    rows, sensors = parse_portal_csv(path)
+    if not rows and not sensors:
         return 0
-    lo, hi = min(r["ts"] for r in rows), max(r["ts"] for r in rows)
+    stamps = [r["ts"] for r in rows + sensors]
     have_api = {(r[0], r[1]) for r in conn.execute(
-        "SELECT thermostat_id, ts FROM ecobee_interval WHERE source = 'api' AND ts BETWEEN ? AND ?", (lo, hi))}
+        "SELECT thermostat_id, ts FROM ecobee_interval WHERE source = 'api' AND ts BETWEEN ? AND ?",
+        (min(stamps), max(stamps)))}
+    store.upsert(conn, "ecobee_sensor", [r for r in sensors if (r["thermostat_id"], r["ts"]) not in have_api])
     return store.upsert(conn, "ecobee_interval",
                         [r for r in rows if (r["thermostat_id"], r["ts"]) not in have_api])
 
