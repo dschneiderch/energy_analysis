@@ -52,3 +52,7 @@ Sources include `local`, `emporia`, `weather`, `ecobee`, `beestat`, `ha_carbon`;
 uv run pytest                  # offline
 uv run pytest -m integration   # hits live APIs, needs credentials
 ```
+
+## Attributions
+
+Big thanks to the Beestat developer for his amazing service and the inspiration to dig deeper.

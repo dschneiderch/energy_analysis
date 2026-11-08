@@ -5,14 +5,9 @@ beestat's per-thermostat temperature profiles (see `beestat-temperature-profiles
 unchanged so it stays comparable with beestat. These options go in a **new module** (for example
 `src/energy/calc/house_profile.py`, plus `energy_signature.py` for option 3).
 
-Insulation work. Use windows ending 2025-11-23 (pre) and starting 2025-12-02 (post).
-
-- **Part 1, 2025-11-24: spray foam on the crawlspace walls and rim joist.** Expected signal: the
-  Living Room thermostat's Basement and crawlspace sensors.
-- **Part 2, 2025-12-01: attic.** Expected signal: the three Upstairs rooms losing heat more slowly
-  (the user's impression is that they do).
-
-Order confirmed on the user's calendar 2026-11-07.
+Insulation work: part 1 (crawlspace foam) on 2025-11-24, part 2 (attic) on 2025-12-01. Use
+windows ending 2025-11-23 (before) and starting 2025-12-02 (after). Results and their
+interpretation: `docs/summaries/insulation-effect.md`.
 
 ## Implemented: `src/energy/calc/house_profile.py` (2026-11-07)
 
@@ -46,45 +41,14 @@ this matters: `zoneAveTemp` (the thermostat's reported indoor temperature) follo
 setting's room. It is within 0.2 °F of the Kids' Room in Sleep and Weekend Home, and of the Office
 in Home.
 
-### Upstairs results (bins ≤ 55 °F)
+### Comparing periods
 
-Heating season only (October 1 – May 31; `house_profile.heating_season`), using
-`generate(conn, tid, spans, rooms)`, which pools several spans into one set of bins:
-
-- **Pre:** 2025-04-16 to 2025-05-31 and 2025-10-01 to 2025-11-23.
-- **Post:** 2025-12-02 to 2026-05-31 and 2026-10-01 to 2026-11-07.
-- **"±"** is 2 standard errors of the per-bin differences. That's a rough guide that ignores
-  correlation between bins, so treat it as optimistic. There is no second pre-insulation heating
-  season in the sensor data to measure natural variation.
-
-| Resist, bins ≤ 55 °F | pre → post (°F/h) | resist samples pre / post |
-| --- | --- | --- |
-| Upstairs 3 rooms (15-min minimum) | −0.44 → −0.35 (+0.09 ± 0.03; 24 bins, 32–55 °F) | 2,307 / 4,426 |
-| Upstairs Bedroom | −0.30 → −0.24 (+0.07 ± 0.05) | 1,158 / 2,014 |
-| Upstairs Kids' Room | −0.52 → −0.47 (+0.06 ± 0.05) | same |
-| Upstairs Office | −0.38 → −0.33 (+0.05 ± 0.05) | same |
-| Upstairs zoneAveTemp (own-type mapping) | −0.53 → −0.47 (+0.05 ± 0.03) | 1,152 / 1,936 |
-| Living Room zoneAveTemp | −0.85 → −0.69 (+0.16 ± 0.11; 20 bins, 35–55 °F) | 1,025 / 1,915 |
-
-Positive change = slower heat loss.
-
-- **Every room and both thermostats lose heat more slowly after the work:** about 20 % for the
-  Upstairs room average (−0.44 → −0.35) and 19 % for the Living Room. Each change is larger than the
-  rough uncertainty. Upstairs matches the attic (part 2); the Living Room zone sits above the foamed
-  crawlspace (part 1).
-- **Season mix remains, and it matters:** pre is spring and fall only, while post includes
-  December–March. Upstairs winter resist reads about 0.1 °F/h *slower* than spring/fall resist at
-  the same outdoor temperature, even with both periods pre-insulation (next section). That's as
-  large as the effect above, so this comparison overstates it. Use the winter-to-winter comparison
-  below.
-- **Expected size:** a 20 % lower heat-loss coefficient should change Upstairs resist by about
-  +0.08 °F/h at these temperatures, close to what is seen.
-- **Heat_1 can't be judged yet.**
-  - Upstairs has only 59 heating samples before the work. The room-average heating rate came out
-    0.47 °F/h lower after the work (±0.43).
-  - Living Room heating came out +0.28 ± 0.35 °F/h, which points the right way but is within noise.
-  - Upstairs zoneAveTemp heating "drops" by 2.4 °F/h. That's the reading switching rooms, not the
-    house.
+- `heating_season(start, end)` returns the October–May parts of a date range. Monthly runtime shows
+  no heating outside them.
+- `generate(conn, tid, spans, rooms)` pools several spans into one set of bins, so a split heating
+  season counts as one period.
+- **"±"** in the results is 2 standard errors of the per-bin differences. That's a rough guide that
+  ignores correlation between bins, so treat it as optimistic.
 
 ### Pre-insulation winter for Upstairs: portal sensors + Emporia gate (2026-11-07)
 
@@ -100,43 +64,19 @@ Positive change = slower heat loss.
     with both thermostats off draw < 0.071, and 99 % of hours with ≥ 5 min of runtime draw ≥ 0.105.
   - Only whole compressor-off hours can then produce resist samples. Upstairs heating samples
     disappear, because Upstairs heating is the compressor.
+  - An hour counts as "on" unless **both** heat-pump channels have a reading. 2024-12-01 to
+    2025-04-15 has no hours with only one channel, so this doesn't affect that winter.
+  - The gate replaces the Living Room data for the whole period, even where real readings exist:
+    672 five-minute readings from 2024-12-01 to 2024-12-03 (end of the Living Room portal export).
+    That keeps the whole pre-insulation winter on one method.
 - **Validation** on the post-insulation heating season, where the true 5-minute state is known:
   the gate keeps 42 % of the room average's resist samples (1,861 of 4,426, 15-minute minimum) and
   reads 0.02 ± 0.04 °F/h faster loss over 26 bins. It loses the bins below 27 °F.
 - **Compressor-off hours in 2024-12-01 to 2025-04-15, by outdoor temperature:** 0 of 45 below
   10 °F; 1 of 96 in the 10s; 26 of 652 in the 20s; 120 of 1,453 in the 30s; 178 of 659 in the 40s.
   The cold snaps can't be covered: the heat pump is never off for a whole hour then.
-
-Upstairs resist, all Emporia-gated, bins ≤ 55 °F (positive = slower heat loss). The 3-room rows
-use the 15-minute minimum, the single-room rows 30 minutes:
-
-| Comparison | °F/h | samples |
-| --- | --- | --- |
-| 3 rooms: pre winter 2024-12-01..2025-04-15 → pre shoulder 2025 (season effect, no insulation) | −0.28 → −0.39 (−0.11 ± 0.04; 19 bins 37–55 °F) | 422 → 1,129 |
-| 3 rooms: pre winter → post heating season | −0.41 → −0.40 (+0.01 ± 0.06) | 422 → 1,861 |
-| **3 rooms: pre winter → post winter 2025-12-02..2026-04-15** | **−0.40 → −0.34 (+0.06 ± 0.06; 25 bins 27–55 °F)** | 422 → 657 |
-| Bedroom, winter → winter | −0.35 → −0.23 (+0.12 ± 0.07) | |
-| Kids' Room, winter → winter | −0.45 → −0.36 (+0.08 ± 0.08) | |
-| Office, winter → winter | −0.47 → −0.40 (+0.06 ± 0.07) | |
-
-- **Winter to winter is the comparison to use.** Same months, same method on both sides. The
-  three Upstairs rooms lose heat about 15 % more slowly after the attic work (+0.06 ± 0.06), down to
-  27 °F. That's within the rough uncertainty: with 30-minute samples (296 → 427) it read
-  +0.09 ± 0.07, so part of that was small-sample noise. Each room points the same way; the Bedroom
-  is clearest (+0.12 ± 0.07).
-- Comparisons that mix seasons mislead in both directions: winter alone reads slower loss than
-  spring and fall (by 0.11 °F/h before the work).
-- Not available: a second pre-insulation winter with room sensors, to measure natural variation.
-
-### Next steps for the insulation signal
-
-- **Part 1 (crawlspace):** Basement and crawlspace sensor temperatures from 2025-04-21. The
-  Living Room portal export also covers 2024-11-01 to 2024-12-02, now imported. Compare their
-  offset from outdoor temperature, or their drift with the heat pump off, before 2025-11-24 and
-  after 2025-12-01. The week between them (crawlspace done, attic not yet) could isolate the
-  crawlspace effect, but a week is a small sample.
-- **Winter 2026-27** adds a second post-insulation winter, ideally a cold one, to firm up the
-  winter-to-winter result.
+- **No second pre-insulation winter with room readings**, so natural variation for comparisons
+  that use the gate can't be measured.
 
 ## Why per-thermostat profiles are weak here
 
@@ -146,8 +86,8 @@ use the 15-minute minimum, the single-room rows 30 minutes:
   heating samples in Apr–Nov 2025.
 - beestat applies the profiled thermostat's heat type to every row. For Upstairs, Living Room heating
   doesn't count as "on", which contaminates Upstairs resist samples.
-- Year-to-year variation in the cold-range bins (±0.1–0.5 °F/h) is as large as any pre/post change
-  seen so far (beestat doc, "Insulation check").
+- Year-to-year variation in the cold-range bins (±0.1–0.5 °F/h) is as large as the before/after
+  changes being measured (`docs/summaries/insulation-effect.md`).
 - Our 5-minute data with both thermostats only starts 2025-04-16, so there is no pre-insulation
   winter in it. beestat has deleted its older 5-minute data.
 
